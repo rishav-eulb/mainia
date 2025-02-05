@@ -26,7 +26,12 @@ export class TwitterKeywordService extends TwitterInteractionClient {
         response: string;
         data?: any;
     }>) {
-        this.keywordPlugin.registerAction({ keywords, action });
+        this.keywordPlugin.registerAction({
+            name: keywords[0], // Use first keyword as name
+            description: `Action triggered by: ${keywords.join(", ")}`,
+            examples: keywords,
+            action
+        });
     }
 
     // Override the handleTweet method to include keyword processing
@@ -56,7 +61,9 @@ export class TwitterKeywordService extends TwitterInteractionClient {
         // If no keyword actions matched, handle normally using parent class
         return super.handleTweet({ tweet, message, thread });
     }
-
+    
+    // If less input is given, then Eliza should prompt back to the user to provide more information for the task.
+    
     // Start the service with keyword processing
     async start() {
         const handleTwitterInteractionsLoop = async () => {
