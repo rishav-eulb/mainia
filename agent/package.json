@@ -19,6 +19,7 @@
     },
     "dependencies": {
         "@elizaos/adapter-supabase": "workspace:*",
+        "@elizaos/plugin-tweet-reply": "workspace:*",
         "@elizaos/adapter-pglite": "workspace:*",
         "@elizaos/adapter-postgres": "workspace:*",
         "@elizaos/adapter-redis": "workspace:*",

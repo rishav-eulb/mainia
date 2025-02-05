@@ -306,7 +306,7 @@ export class TwitterInteractionClient {
         }
     }
 
-    private async handleTweet({
+    public async handleTweet({
         tweet,
         message,
         thread,

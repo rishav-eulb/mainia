@@ -5,6 +5,7 @@ import { TwitterInteractionClient } from "./interactions.ts";
 import { TwitterPostClient } from "./post.ts";
 import { TwitterSearchClient } from "./search.ts";
 import { TwitterSpaceClient } from "./spaces.ts";
+import { TwitterKeywordService } from "./plugins/TwitterKeywordService";
 
 /**
  * A manager that orchestrates all specialized Twitter logic:
@@ -13,13 +14,15 @@ import { TwitterSpaceClient } from "./spaces.ts";
  * - search: searching tweets / replying logic
  * - interaction: handling mentions, replies
  * - space: launching and managing Twitter Spaces (optional)
+ * - keywordService: handling keyword-based interactions (optional)
  */
-class TwitterManager {
+class TwitterManager implements Client {
     client: ClientBase;
     post: TwitterPostClient;
     search: TwitterSearchClient;
     interaction: TwitterInteractionClient;
     space?: TwitterSpaceClient;
+    keywordService?: TwitterKeywordService;
 
     constructor(runtime: IAgentRuntime, twitterConfig: TwitterConfig) {
         // Pass twitterConfig to the base client
@@ -45,43 +48,56 @@ class TwitterManager {
         if (twitterConfig.TWITTER_SPACES_ENABLE) {
             this.space = new TwitterSpaceClient(this.client, runtime);
         }
+
+        // Optional keyword service (enabled if TWITTER_KEYWORD_SERVICE_ENABLE is true)
+        if (twitterConfig.TWITTER_KEYWORD_SERVICE_ENABLE) {
+            elizaLogger.log("Initializing Twitter keyword service");
+            this.keywordService = new TwitterKeywordService(this.client, runtime);
+        }
+    }
+
+    async start() {
+        // // Start the post client
+        // await this.post.start();
+
+        // // Start the search client if enabled
+        // if (this.search) {
+        //     await this.search.start();
+        // }
+
+        // // Start the interaction client
+        // await this.interaction.start();
+
+        // // Start the space client if enabled
+        // if (this.space) {
+        //     await this.space.startPeriodicSpaceCheck();
+        // }
+
+        // Start the keyword service if enabled
+        if (this.keywordService) {
+            await this.keywordService.start();
+        }
+    }
+
+    async stop() {
+        // Stop the space client if enabled
+        if (this.space) {
+            this.space.stopPeriodicCheck();
+        }
+
+        elizaLogger.log("Twitter client stopped");
     }
 }
 
-export const TwitterClientInterface: Client = {
-    async start(runtime: IAgentRuntime) {
-        const twitterConfig: TwitterConfig =
-            await validateTwitterConfig(runtime);
+export async function createTwitterClient(
+    runtime: IAgentRuntime
+): Promise<Client> {
+    const twitterConfig = await validateTwitterConfig(runtime);
+    const manager = new TwitterManager(runtime, twitterConfig);
+    await manager.start();
+    return manager;
+}
 
-        elizaLogger.log("Twitter client started");
-
-        const manager = new TwitterManager(runtime, twitterConfig);
-
-        // Initialize login/session
-        await manager.client.init();
-
-        // Start the posting loop
-        await manager.post.start();
-
-        // Start the search logic if it exists
-        if (manager.search) {
-            await manager.search.start();
-        }
-
-        // Start interactions (mentions, replies)
-        await manager.interaction.start();
-
-        // If Spaces are enabled, start the periodic check
-        if (manager.space) {
-            manager.space.startPeriodicSpaceCheck();
-        }
-
-        return manager;
-    },
-
-    async stop(_runtime: IAgentRuntime) {
-        elizaLogger.warn("Twitter client does not support stopping yet");
-    },
-};
-
-export default TwitterClientInterface;
+export * from "./environment.ts";
+export * from "./plugins/KeywordActionPlugin";
+export * from "./plugins/TwitterKeywordService";

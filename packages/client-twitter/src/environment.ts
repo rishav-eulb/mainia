@@ -37,6 +37,7 @@ export const twitterEnvSchema = z.object({
     TWITTER_RETRY_LIMIT: z.number().int(),
     TWITTER_POLL_INTERVAL: z.number().int(),
     TWITTER_TARGET_USERS: z.array(twitterUsernameSchema).default([]),
+    TWITTER_KEYWORD_SERVICE_ENABLE: z.boolean().default(false),
     // I guess it's possible to do the transformation with zod
     // not sure it's preferable, maybe a readability issue
     // since more people will know js/ts than zod
@@ -223,6 +224,12 @@ export async function validateTwitterConfig(
             ACTION_TIMELINE_TYPE:
                 runtime.getSetting("ACTION_TIMELINE_TYPE") ||
                 process.env.ACTION_TIMELINE_TYPE,
+
+            TWITTER_KEYWORD_SERVICE_ENABLE:
+                parseBooleanFromText(
+                    runtime.getSetting("TWITTER_KEYWORD_SERVICE_ENABLE") ||
+                        process.env.TWITTER_KEYWORD_SERVICE_ENABLE
+                ) ?? false,
         };
 
         return twitterEnvSchema.parse(twitterConfig);
