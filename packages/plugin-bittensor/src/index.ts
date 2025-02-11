@@ -1,6 +1,4 @@
 import type { Plugin } from "@elizaos/core";
-import { TwitterClientInterface } from "@elizaos/client-twitter";
-
 import { analyzeImage, analysisHistory } from "./actions/sn34.ts";
 import { factEvaluator } from "./evaluators/fact.ts";
 import { timeProvider } from "./providers/time.ts";
@@ -19,6 +17,6 @@ export const bittensorPlugin: Plugin = {
     ],
     evaluators: [factEvaluator],
     providers: [timeProvider],
-    clients: [TwitterClientInterface]
+    
 };
 export default bittensorPlugin;

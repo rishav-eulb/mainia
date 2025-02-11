@@ -1,13 +1,13 @@
 {
     "name": "MovementHelper",
-    "clients": ["telegram"],
+    "clients": ["telegram","twitter"],
     "modelProvider": "anthropic",
     "settings": {
         "voice": {
             "model": "en_US-male-medium"
         }
     },
-    "plugins": ["@elizaos/plugin-tweet-reply"],
+    "plugins": ["@elizaos/core/plugin-tweet-reply"],
     "bio": [
         "Expert in Movement ecosystem.",
         "Knowledgeable in Move language and MoveVMm.",
@@ -69,9 +69,10 @@
         " resist attacks. Single-asset staking requires stakers to stake in a fixed \n\n Fig. 10. Multi-asset staking. \n\ncrypto currency which means that they may have to swap assets before staking if they don’t hold the token used in the staking protocol. This can be hurdle for stakers. This is why we will enable multi-asset staking, which is PoS that allows stakers to stake and get rewards in multiple assets (Figure 10, Image by myriammir on Freepik). \n\n# \u0011 \n\n This is why we will enable multi-asset staking, which is PoS that allows stakers to stake and get rewards in multiple assets. \n\nMulti-asset staking is convenient for stakers but comes with some challenges for the operator of the network: \n\n- the staking pool is composed of several assets the prices of which may fluctuate, \n\n- a PoS protocol usually relies on a super-majority of 2/3 of the total stake to finalize a     decision (an ordering in the sequencer, a confirmation of a new block through FFS). \n\n\n- as a result of the previous two p",
         "oints, some stakers may obtain unreasonable power and     a small fraction of them may control the 2/3 super-majority, which negatively impact     crypto security. \n\nOne solution to mitigate the problem is to use a (staking) pool token. Stakers stake arbitrary assets and are awarded pool tokens. When new stakers stake (resp. unstake) some assets, pool tokens can be minted (resp. burnt) and some re-balancing strategies [6] and liquidity curves choices have to be applied to manage the staking pool. The implementation of secure strategies that protect our stakers (e.g. from impermanent loss) is an active research topic. A critical feature in our multi-staking approach is the ability to stake without operating a node. This mechanism, called Delegation, maximizes the amount of staked value and, therefore, boosts the economic security substantially. \n\n\n##### References \n\n1. 0L: 0l network. https://0l.network/, accessed: 2024-01-12 \n\n2. Aptos: https://aptosfoundation.org/, accessed: 2024-01-1",
         "2 \n\n3. Blackshear, S., Cheng, E., Dill, D.L., Gao, V., Maurer, B., Nowacki, T., Pott, A., Qadeer, S.,     Rain, D.R., Sezer, S., et al.: Move: A language with programmable resources. Libra Assoc p. 1     (2019) \n\n4. Blackshear, S., Chursin, A., Danezis, G., Kichidis, A., Kokoris-Kogias, L., Li, X., Logan, M.,     Menon, A., Nowacki, T., Sonnino, A., Williams, B., Zhang, L.: Sui lutris: A blockchain com-     bining broadcast and consensus (2023) \n\n5. Buterin, V., et al.: A next-generation smart contract and decentralized application platform.     white paper 3 (37), 2–1 (2014) \n\n6. Forgy, E., Lau, L.: A family of multi-asset automated market makers (2022), https://arxiv.     org/abs/2111.08115 \n\n7. Ivanov, N., Li, C., Sun, Z., Cao, Z., Luo, X., Yan, Q.: Security threat mitigation for smart     contracts: A survey. arXiv preprint arXiv:2302.07347 (2023) \n\n8. Liu, C., Liu, H., Cao, Z., Chen, Z., Chen, B., Roscoe, B.: Reguard: finding reentrancy bugs in     smart contracts. In: Proceedings",
-        " of the 40th International Conference on Software Engineering:     Companion Proceeedings. pp. 65–68 (2018) \n\n9. Motepalli, S., Freitas, L., Livshits, B.: Sok: Decentralized sequencers for rollups. arXiv preprint     arXiv:2310.03616 (2023) \n\n10. Motepalli, S., Jacobsen, H.A.: Decentralizing permissioned blockchain with delay towers. arXiv     preprint arXiv:2203.09714 (2022) \n\n11. Nakamoto, S.: Bitcoin: A peer-to-peer electronic cash system. Cryptography Mailing List (2008) \n\n12. Ogundeji, O.: Vitalik buterin sets milestones on ethereum’s route to be the ‘world computer’.     https://cointelegraph.com/news/vitalik-buterin-sets-milestones-on-ethereums-rou     te-to-be-the-world-computer (2016), accessed: 2024-01-11 \n\n13. Sui: https://sui.io/, accessed: 2024-01-12 \n\n14. Ye, Z., Misra, U., Song, D.: Specular: Towards Trust-minimized Blockchain Execution Scala-     bility with EVM-native Fraud Proofs. CoRR abs/2212.05219 (2022), https://doi.org/10     .48550/arXiv.2212.05219 \n\n\n"
+        " of the 40th International Conference on Software Engineering:     Companion Proceeedings. pp. 65–68 (2018) \n\n9. Motepalli, S., Freitas, L., Livshits, B.: Sok: Decentralized sequencers for rollups. arXiv preprint     arXiv:2310.03616 (2023) \n\n10. Motepalli, S., Jacobsen, H.A.: Decentralizing permissioned blockchain with delay towers. arXiv     preprint arXiv:2203.09714 (2022) \n\n11. Nakamoto, S.: Bitcoin: A peer-to-peer electronic cash system. Cryptography Mailing List (2008) \n\n12. Ogundeji, O.: Vitalik buterin sets milestones on ethereum’s route to be the ‘world computer’.     https://cointelegraph.com/news/vitalik-buterin-sets-milestones-on-ethereums-rou     te-to-be-the-world-computer (2016), accessed: 2024-01-11 \n\n13. Sui: https://sui.io/, accessed: 2024-01-12 \n\n14. Ye, Z., Misra, U., Song, D.: Specular: Towards Trust-minimized Blockchain Execution Scala-     bility with EVM-native Fraud Proofs. CoRR abs/2212.05219 (2022), https://doi.org/10     .48550/arXiv.2212.05219 \n\n\n"        
+       
+    ],
 
-  ],
     "messageExamples": [
         [
             {

@@ -1,6 +1,6 @@
 import type { Plugin, IAgentRuntime, Memory, State } from "@elizaos/core";
 import { elizaLogger, settings } from "@elizaos/core";
-import { TwitterClientInterface } from "@elizaos/client-twitter";
+import { createTwitterClient } from "@elizaos/client-twitter";
 import {
     solanaPlugin,
     trustScoreProvider,
@@ -589,7 +589,7 @@ async function createRabbiTraderPlugin(
 
         if (twitterConfig.enabled && runtime) {
             elizaLogger.log("Starting Twitter client initialization...");
-            const twitterClient = await TwitterClientInterface.start(runtime);
+            const twitterClient = await createTwitterClient(runtime);
             twitterService = new TwitterService(twitterClient, twitterConfig);
 
             // Add delay after initialization
