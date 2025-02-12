@@ -13,6 +13,7 @@ import {
 import { ClientBase } from "../base";
 
 // Interface for parameter requirements
+// what is valid parameter for? Is it required?
 export interface IParameterRequirement {
     name: string;
     prompt: string;
@@ -21,15 +22,49 @@ export interface IParameterRequirement {
 }
 
 // Interface for defining an action that can be triggered by keywords
+
+// can we use IKeywordPlugin instead of IKeywordAction?
 export interface IKeywordAction {
-    name: string;           // Name of the action
-    description: string;    // Description of what the action does
-    examples: string[];     // Example phrases that indicate this action
-    requiredParameters?: IParameterRequirement[];  // Parameters needed for this action
+    name: string;           
+    description: string;    
+    examples: string[];     
+    requiredParameters?: IParameterRequirement[];
+    metadata?: {
+        category: 'QUERY' | 'MUTATION' | 'CONDITION' | 'COMPOSITE';  // Type of action
+        returns?: {
+            type: 'NUMBER' | 'BOOLEAN' | 'STRING' | 'ADDRESS' | 'OBJECT';  // Return type for chaining
+            unit?: string;  // e.g., 'MOVE', 'USD', etc.
+            constraints?: {
+                min?: number;
+                max?: number;
+                pattern?: string;
+            };
+        };
+        dependencies?: string[];  // Actions that must be executed before this one
+        canBeCondition?: boolean;  // Can this action be used in conditional statements
+        composable?: boolean;  // Can this action be part of a composite operation
+        sideEffects?: boolean;  // Does this action modify state
+        cost?: 'HIGH' | 'MEDIUM' | 'LOW';  // Resource/computational cost
+        timeout?: number;  // Maximum execution time in ms
+    };
     action: (tweet: Tweet, runtime: IAgentRuntime, collectedParams?: Map<string, string>) => Promise<{
-        response: string;  // The response to send back
-        data?: any;       // Any additional data from the action
-        action?: string;  // The action to take
+        response: string;
+        data?: any;
+        action?: string;
+    }>;
+}
+
+// Interface for keyword plugins
+export interface IKeywordPlugin {
+    name: string;
+    description: string;
+    initialize(client: ClientBase, runtime: IAgentRuntime): Promise<void>;
+    getActions(): IKeywordAction[];
+    registerAction(action: IKeywordAction): void;
+    handleTweet?(tweet: Tweet, runtime: IAgentRuntime): Promise<{
+        response?: string;
+        data?: any;
+        action?: string;
     }>;
 }
 
@@ -57,7 +92,7 @@ User's message:
 Previous conversation context:
 {{conversationContext}}
 
-# Instructions:
+# Instructions: 
 1. Analyze if the user's message indicates they want to perform one of the available actions
 2. Consider both explicit mentions and implicit intentions
 3. Look for contextual clues and previous conversation history
@@ -106,7 +141,27 @@ Previous conversation context:
 
 Only respond with the JSON, no other text.`;
 
+// Define a type for action expressions that can be evaluated
+interface ActionExpression {
+    type: 'ACTION' | 'CONDITION' | 'OPERATOR' | 'VALUE';
+    value: string | number | ActionExpression[];
+    operator?: 'AND' | 'OR' | 'GT' | 'LT' | 'EQ' | 'ADD' | 'SUB' | 'MUL' | 'DIV';
+    children?: ActionExpression[];
+    parameters?: Map<string, string>;
+    priority?: number;
+}
+
+// Define a type for the execution context
+interface ExecutionContext {
+    variables: Map<string, any>;
+    results: Map<string, any>;
+    errors: Error[];
+    depth: number;
+    maxDepth: number;
+}
+
 export class KeywordActionPlugin {
+    private plugins: Map<string, IKeywordPlugin> = new Map();
     private actions: IKeywordAction[] = [];
     private client: ClientBase;
     private runtime: IAgentRuntime;
@@ -129,6 +184,32 @@ export class KeywordActionPlugin {
                 this.pendingActions.delete(userId);
             }
         }
+    }
+
+    // Register a new keyword plugin
+    public async registerPlugin(plugin: IKeywordPlugin): Promise<void> {
+        await plugin.initialize(this.client, this.runtime);
+        this.plugins.set(plugin.name, plugin);
+        
+        // Register all actions from the plugin
+        const actions = plugin.getActions();
+        actions.forEach(action => this.registerAction(action));
+        
+        elizaLogger.info("KeywordActionPlugin: Registered plugin:", {
+            name: plugin.name,
+            description: plugin.description,
+            actionCount: actions.length
+        });
+    }
+
+    // Get plugin by name
+    public getPlugin(name: string): IKeywordPlugin | undefined {
+        return this.plugins.get(name);
+    }
+
+    // Get all registered plugins
+    public getPlugins(): IKeywordPlugin[] {
+        return Array.from(this.plugins.values());
     }
 
     // Register a new keyword action
@@ -166,6 +247,8 @@ export class KeywordActionPlugin {
         }
         return null;
     }
+    
+    //TODO: To add conversation context to the Memory 
 
     private async recognizeIntent(tweet: Tweet, conversationContext: string[] = []): Promise<any> {
         const availableActions = this.actions.map(a => 
@@ -184,26 +267,134 @@ export class KeywordActionPlugin {
 
         const state = await this.runtime.composeState(memory, {
             availableActions,
-            userMessage: tweet.text,
-            conversationContext: conversationContext.join("\n")
+            conversationContext: conversationContext.join("\n"),
+            tweet: tweet.text
         });
 
         const context = composeContext({
             state,
-            template: intentRecognitionTemplate
+            template: `# Task: Analyze user request for potential actions and conditions
+
+Available Actions:
+{{availableActions}}
+
+User's message:
+{{tweet}}
+
+Previous conversation context:
+{{conversationContext}}
+
+# Instructions:
+1. Break down complex requests into individual actions
+2. Identify conditional relationships between actions
+3. Look for:
+   - Balance checks
+   - Token transfers
+   - Wallet queries
+   - Conditions (if/then statements)
+   - Numerical comparisons
+4. Consider variations in phrasing and implicit actions
+5. Return analysis in this JSON format:
+{
+    "actions": [
+        {
+            "type": "ACTION",
+            "name": string,
+            "priority": number,
+            "parameters": object,
+            "dependsOn": string[] // IDs of actions this depends on
+        }
+    ],
+    "conditions": [
+        {
+            "type": "CONDITION",
+            "check": {
+                "action": string,
+                "comparison": "GT" | "LT" | "EQ",
+                "value": number
+            },
+            "thenActions": string[],
+            "elseActions": string[]
+        }
+    ],
+    "reasoning": string
+}
+
+Only respond with the JSON, no other text.`
         });
 
-        const response = await generateText({
+        const intentAnalysis = await generateText({
             runtime: this.runtime,
             context,
             modelClass: ModelClass.SMALL
         });
 
         try {
-            return JSON.parse(response);
+            const analysis = JSON.parse(intentAnalysis);
+            const matchedActions = [];
+            
+            // Process actions based on conditions
+            if (analysis.actions && analysis.conditions) {
+                // First, add all unconditional actions
+                const unconditionalActions = analysis.actions.filter(
+                    a => !analysis.conditions.some(c => 
+                        c.thenActions.includes(a.name) || 
+                        c.elseActions.includes(a.name)
+                    )
+                );
+                
+                for (const actionInfo of unconditionalActions) {
+                    const action = this.actions.find(a => a.name === actionInfo.name);
+                    if (action) {
+                        matchedActions.push({
+                            action,
+                            parameters: actionInfo.parameters,
+                            priority: actionInfo.priority || 0
+                        });
+                    }
+                }
+
+                // Then process conditional actions
+                for (const condition of analysis.conditions) {
+                    const checkAction = this.actions.find(a => a.name === condition.check.action);
+                    if (checkAction) {
+                        matchedActions.push({
+                            action: checkAction,
+                            parameters: {},
+                            priority: 1, // Check conditions first
+                            isCondition: true,
+                            condition
+                        });
+                    }
+                }
+            } else {
+                // Fallback to simple action matching
+                for (const action of this.actions) {
+                    const matches = action.examples.some(example => 
+                        tweet.text.toLowerCase().includes(example.toLowerCase()) ||
+                        example.toLowerCase().includes(tweet.text.toLowerCase())
+                    );
+                    if (matches) {
+                        matchedActions.push({
+                            action,
+                            parameters: {},
+                            priority: 0
+                        });
+                    }
+                }
+            }
+
+            // Sort actions by priority
+            return matchedActions.sort((a, b) => b.priority - a.priority);
         } catch (error) {
-            console.error('Error parsing intent recognition response:', error);
-            return null;
+            elizaLogger.error("Error parsing intent analysis:", error);
+            // Fallback to simple action matching
+            return this.actions.filter(action => 
+                action.examples.some(example => 
+                    tweet.text.toLowerCase().includes(example.toLowerCase()) ||
+                    example.toLowerCase().includes(tweet.text.toLowerCase())
+                )
+            );
         }
     }
 
@@ -213,49 +404,49 @@ export class KeywordActionPlugin {
         conversationContext: string[]
     ): Promise<any> {
         try {
-            const template = paramReq.extractorTemplate || parameterExtractionTemplate;
-            
-            const memory: Memory = {
-                id: stringToUuid(tweet.id + "-param"),
-                userId: stringToUuid(tweet.userId),
-                agentId: this.runtime.agentId,
-                roomId: stringToUuid(tweet.id),
-                content: { text: tweet.text || "" },
-                embedding: getEmbeddingZeroVector(),
-                createdAt: Date.now()
-            };
+        const template = paramReq.extractorTemplate || parameterExtractionTemplate;
+        
+        const memory: Memory = {
+            id: stringToUuid(tweet.id + "-param"),
+            userId: stringToUuid(tweet.userId),
+            agentId: this.runtime.agentId,
+            roomId: stringToUuid(tweet.id),
+            content: { text: tweet.text || "" },
+            embedding: getEmbeddingZeroVector(),
+            createdAt: Date.now()
+        };
 
-            const state = await this.runtime.composeState(memory, {
-                parameterName: paramReq.name,
-                parameterDescription: paramReq.prompt,
-                userMessage: tweet.text,
+        const state = await this.runtime.composeState(memory, {
+            parameterName: paramReq.name,
+            parameterDescription: paramReq.prompt,
+            userMessage: tweet.text,
                 conversationContext: conversationContext.join("\n"),
                 agentName: this.client.twitterConfig.TWITTER_USERNAME,
                 twitterUserName: this.client.twitterConfig.TWITTER_USERNAME,
                 bio: "A bot that helps with token transfers and other actions"
-            });
+        });
 
-            const context = composeContext({
-                state,
-                template
-            });
+        const context = composeContext({
+            state,
+            template
+        });
 
-            const response = await generateText({
-                runtime: this.runtime,
-                context,
+        const response = await generateText({
+            runtime: this.runtime,
+            context,
                 modelClass: ModelClass.SMALL,
                 verifiableInference: true // Use verifiable inference to ensure valid JSON
-            });
+        });
 
-            try {
-                const result = JSON.parse(response);
-                
-                // If we need clarification but have asked too many times, try best effort
-                if (result.clarificationNeeded && result.alternativeValues?.length > 0) {
-                    const pendingAction = this.pendingActions.get(tweet.userId);
-                    if (pendingAction && pendingAction.clarificationCount >= this.MAX_CLARIFICATIONS) {
-                        result.extracted = true;
-                        result.value = result.alternativeValues[0];
+        try {
+            const result = JSON.parse(response);
+            
+            // If we need clarification but have asked too many times, try best effort
+            if (result.clarificationNeeded && result.alternativeValues?.length > 0) {
+                const pendingAction = this.pendingActions.get(tweet.userId);
+                if (pendingAction && pendingAction.clarificationCount >= this.MAX_CLARIFICATIONS) {
+                    result.extracted = true;
+                    result.value = result.alternativeValues[0];
                         result.clarificationNeeded = false;
                     }
                 }
@@ -296,288 +487,310 @@ export class KeywordActionPlugin {
         response?: string;
         data?: any;
         needsMoreInput?: boolean;
+        results?: Array<{
+            action: string;
+            response: string;
+            data?: any;
+        }>;
     }> {
-        const userId = tweet.userId;
-        const pendingAction = this.pendingActions.get(userId);
+        try {
+            // First, analyze the tweet to build action expressions
+            const state = await this.runtime.composeState({
+                id: stringToUuid(tweet.id + "-intent"),
+                userId: stringToUuid(tweet.userId),
+                agentId: this.runtime.agentId,
+                roomId: stringToUuid(tweet.id),
+                content: { text: tweet.text || "" },
+                embedding: getEmbeddingZeroVector(),
+                createdAt: Date.now()
+            }, {
+                availableActions: this.actions.map(a => ({
+                    name: a.name,
+                    description: a.description,
+                    metadata: a.metadata,
+                    examples: a.examples
+                })),
+                tweet: tweet.text
+            });
 
-        if (pendingAction) {
-            pendingAction.conversationContext.push(`User: ${tweet.text}`);
-            pendingAction.lastPromptTime = Date.now();
-            pendingAction.attempts++;
+            const context = composeContext({
+                state,
+                template: `# Task: Parse user request into action expressions
 
-            // Check if we've exceeded max attempts
-            if (pendingAction.attempts > this.MAX_ATTEMPTS) {
-                this.pendingActions.delete(userId);
-                return {
-                    hasAction: true,
-                    response: "I'm having trouble understanding. Let's start over - could you rephrase your request?",
-                };
-            }
-
-            // Try to extract missing parameters
-            for (const paramReq of pendingAction.actionHandler.requiredParameters || []) {
-                if (!pendingAction.collectedParams.has(paramReq.name)) {
-                    const extraction = await this.extractParameter(
-                        paramReq,
-                        tweet,
-                        pendingAction.conversationContext
-                    );
-
-                    if (extraction?.extracted && extraction?.confidence !== 'LOW') {
-                        if (!paramReq.validator || paramReq.validator(extraction.value)) {
-                            pendingAction.collectedParams.set(paramReq.name, extraction.value);
-                            pendingAction.conversationContext.push(
-                                `Bot: ${extraction.suggestedPrompt || `Great! I got the ${paramReq.name}.`}`
-                            );
-                            continue;
-                        }
-                    }
-
-                    // Handle clarification needs
-                    if (extraction?.clarificationNeeded) {
-                        pendingAction.clarificationCount++;
-                        if (pendingAction.clarificationCount <= this.MAX_CLARIFICATIONS) {
-                            const prompt = extraction.suggestedPrompt || paramReq.prompt;
-                            if (prompt !== pendingAction.lastParameterPrompt) {
-                                pendingAction.lastParameterPrompt = prompt;
-                                return {
-                                    hasAction: true,
-                                    response: prompt,
-                                    needsMoreInput: true
-                                };
-                            }
-                        }
-                    }
-
-                    // If we couldn't extract and haven't asked too many times, ask for it
-                    return {
-                        hasAction: true,
-                        response: paramReq.prompt,
-                        needsMoreInput: true
-                    };
-                }
-            }
-
-            // Execute action with all parameters
-            try {
-                const result = await pendingAction.actionHandler.action(
-                    tweet,
-                    this.runtime,
-                    pendingAction.collectedParams
-                );
-                this.pendingActions.delete(userId);
-                return {
-                    hasAction: true,
-                    response: result.response,
-                    data: result.data,
-                    action: result.action
-                };
-            } catch (error) {
-                console.error('Error executing action:', error);
-                this.pendingActions.delete(userId);
-                return {
-                    hasAction: true,
-                    response: "I encountered an error while processing your request. Could you try again?"
-                };
-            }
-        }
-
-        // No pending action, try to recognize intent
-        const intent = await this.recognizeIntent(tweet);
-        elizaLogger.debug("KeywordActionPlugin: Intent recognition result:", intent);
-        
-        if (intent?.hasIntent && intent?.actionName && intent.confidence !== 'LOW') {
-            const actionHandler = this.actions.find(a => a.name === intent.actionName);
-            elizaLogger.debug("KeywordActionPlugin: Found action handler:", actionHandler?.name);
-            if (actionHandler) {
-                // Initialize new action with extracted parameters
-                const collectedParams = new Map<string, string>();
-                if (intent.extractedParams) {
-                    Object.entries(intent.extractedParams).forEach(([key, value]) => {
-                        if (value && (!actionHandler.requiredParameters?.find(p => p.name === key)?.validator || 
-                            actionHandler.requiredParameters?.find(p => p.name === key)?.validator?.(value as string))) {
-                            collectedParams.set(key, value as string);
-                        }
-                    });
-                }
-
-                // If we have all parameters, execute immediately
-                if (actionHandler.requiredParameters?.every(p => collectedParams.has(p.name))) {
-                    try {
-                        const result = await actionHandler.action(tweet, this.runtime, collectedParams);
-                        return {
-                            hasAction: true,
-                            response: result.response,
-                            data: result.data,
-                            action: result.action
-                        };
-                    } catch (error) {
-                        console.error('Error executing action:', error);
-                        return {
-                            hasAction: true,
-                            response: "I encountered an error while processing your request. Could you try again?"
-                        };
-                    }
-                }
-
-                // Start parameter collection with a natural response
-                this.pendingActions.set(userId, {
-                    actionHandler,
-                    collectedParams,
-                    lastPromptTime: Date.now(),
-                    userId,
-                    roomId: stringToUuid(tweet.id),
-                    conversationContext: [`User: ${tweet.text}`],
-                    attempts: 1,
-                    clarificationCount: 0
-                });
-
-                // Use the suggested response from intent recognition if available
-                const response = intent.suggestedResponse || 
-                    actionHandler.requiredParameters?.find(p => !collectedParams.has(p.name))?.prompt ||
-                    "I need some more information to help you with that.";
-
-                return {
-                    hasAction: true,
-                    response,
-                    needsMoreInput: true
-                };
-            }
-        }
-
-        return {
-            hasAction: false
-        };
-    }
-
-    private async validateTweetIntent(tweet: Tweet, thread: Tweet[]): Promise<{
-        hasIntent: boolean;
-        intentType: "NEW_INTENT" | "CONTINUE_CONVERSATION" | "CANCEL_INTENT" | "NORMAL_CONVERSATION";
-        actionName: string | null;
-        confidence: "HIGH" | "MEDIUM" | "LOW";
-        reasoning: string;
-    }> {
-        // First, try to find if this is part of an existing conversation
-        const existingActionKey = await this.findExistingActionKey(tweet, thread);
-        let existingAction: PendingAction | undefined;
-        if (existingActionKey) {
-            existingAction = this.pendingActions.get(existingActionKey);
-        }
-
-        const availableActions = this.actions.map(a => 
-            `${a.name}: ${a.description}\nExample phrases: ${a.examples.join(", ")}`
-        ).join("\n\n");
-
-        // Include the full conversation context from the pending action if it exists
-        const conversationContext = existingAction 
-            ? existingAction.conversationContext.join("\n")
-            : thread.map(t => `${t.username}: ${t.text}`).join("\n");
-
-        // Get all messages from the same room for better context
-        const roomMessages = await this.runtime.messageManager.getMemoriesByRoomIds({
-            roomIds: [stringToUuid(existingAction?.roomId || tweet.id)],
-            limit: 10  // Get last 10 messages for context
-        });
-
-        const roomContext = roomMessages
-            .sort((a, b) => a.createdAt - b.createdAt)
-            .map(msg => `${msg.userId}: ${msg.content.text}`)
-            .join("\n");
-
-        const memory: Memory = {
-            id: stringToUuid(tweet.id + "-intent"),
-            userId: stringToUuid(tweet.userId || ""),
-            agentId: this.runtime.agentId,
-            roomId: stringToUuid(existingAction?.roomId || tweet.id),
-            content: { text: tweet.text || "" },
-            embedding: getEmbeddingZeroVector(),
-            createdAt: Date.now()
-        };
-
-        const state = await this.runtime.composeState(memory, {
-            availableActions,
-            userMessage: tweet.text,
-            conversationContext,
-            roomContext,
-            currentAction: existingAction ? {
-                name: existingAction.actionHandler.name,
-                collectedParams: Object.fromEntries(existingAction.collectedParams),
-                missingParams: existingAction.actionHandler.requiredParameters
-                    ?.filter(param => !existingAction.collectedParams.has(param.name))
-                    .map(param => param.name) || []
-            } : null
-        });
-
-        const enhancedIntentTemplate = `
-# Task: Determine if the user's message indicates intent to perform a specific action or is a normal conversation.
-
-Available Actions:
+Available Actions with Metadata:
 {{availableActions}}
 
 User's message:
-{{userMessage}}
-
-Previous conversation context:
-{{conversationContext}}
-
-Room conversation history:
-{{roomContext}}
-
-${existingAction ? `
-Current ongoing action:
-- Action: ${existingAction.actionHandler.name}
-- Collected parameters: ${Array.from(existingAction.collectedParams.entries()).map(([key, value]) => `${key}=${value}`).join(', ')}
-- Missing parameters: ${existingAction.actionHandler.requiredParameters
-    ?.filter(param => !existingAction.collectedParams.has(param.name))
-    .map(param => param.name)
-    .join(', ')}
-` : ''}
+{{tweet}}
 
 # Instructions:
-1. Analyze if the user's message indicates they want to perform one of the available actions
-2. Consider both explicit mentions and implicit intentions
-3. Look for contextual clues and previous conversation history
-4. If there's an ongoing action, determine if:
-   - User is providing missing parameters
-   - User wants to cancel the action
-   - User wants to start a new action instead
-5. Return your response in this JSON format:
-{
-    "hasIntent": boolean,
-    "intentType": "NEW_INTENT" | "CONTINUE_CONVERSATION" | "CANCEL_INTENT" | "NORMAL_CONVERSATION",
-    "actionName": "string or null",
-    "confidence": "HIGH/MEDIUM/LOW",
-    "reasoning": "Brief explanation of the decision",
-    "extractedParams": {
-        "paramName": "extractedValue"
+1. Break down the request into a series of action expressions
+2. Consider:
+   - Direct actions
+   - Conditional statements
+   - Mathematical operations
+   - Logical operations
+3. Return the expressions as a JSON array:
+[
+    {
+        "type": "ACTION" | "CONDITION" | "OPERATOR" | "VALUE",
+        "value": string | number,
+        "operator"?: "AND" | "OR" | "GT" | "LT" | "EQ" | "ADD" | "SUB" | "MUL" | "DIV",
+        "children"?: Array<Expression>,
+        "parameters"?: object,
+        "priority"?: number
     }
-}
+]
 
-Only respond with the JSON, no other text.`;
+Only respond with the JSON array, no other text.`
+            });
 
-        const context = composeContext({
-            state,
-            template: enhancedIntentTemplate
-        });
+            const expressionsResponse = await generateText({
+                runtime: this.runtime,
+                context,
+                modelClass: ModelClass.SMALL
+            });
 
-        const response = await generateText({
-            runtime: this.runtime,
-            context,
-            modelClass: ModelClass.SMALL
-        });
+            let expressions: ActionExpression[];
+            try {
+                expressions = JSON.parse(expressionsResponse);
+            } catch (error) {
+                elizaLogger.error("Error parsing expressions:", error);
+                return {
+                    hasAction: false,
+                    response: "I'm having trouble understanding your request. Could you please rephrase it?"
+                };
+            }
 
-        try {
-            return JSON.parse(response);
-        } catch (error) {
-            elizaLogger.error("Error parsing intent validation response:", error);
+            if (!expressions || expressions.length === 0) {
+                return {
+                    hasAction: false,
+                    response: "I understand you're trying to perform some actions. I can help with:\n" +
+                        this.actions.map(a => `- ${a.description}`).join("\n") +
+                        "\nPlease let me know what you'd like to do."
+                };
+            }
+
+            // Execute the action graph
+            const results = await this.executeActionGraph(expressions, tweet);
+            
+            if (results.size === 0) {
+                return {
+                    hasAction: false,
+                    response: "I couldn't execute any actions. Please check if you have the necessary permissions and try again."
+                };
+            }
+
+            // Format the response based on results
+            const responses: string[] = [];
+            for (const [actionName, result] of results.entries()) {
+                const action = this.getActionByName(actionName);
+                if (action?.metadata?.category === 'QUERY') {
+                    responses.push(`${action.description}: ${result}`);
+                } else if (action?.metadata?.category === 'MUTATION') {
+                    responses.push(`Successfully ${action.description.toLowerCase()}`);
+                }
+            }
+
             return {
-                hasIntent: false,
-                intentType: "NORMAL_CONVERSATION",
-                actionName: null,
-                confidence: "LOW",
-                reasoning: "Error parsing intent validation"
+                hasAction: true,
+                action: "COMPOSITE",
+                response: responses.join("\n"),
+                results: Array.from(results.entries()).map(([action, data]) => ({
+                    action,
+                    response: `Completed ${action}`,
+                    data
+                }))
+            };
+
+        } catch (error) {
+            elizaLogger.error("Error in processTweet:", error);
+            return {
+                hasAction: true,
+                action: "ERROR",
+                response: "I encountered an error while processing your request. Please try again with a simpler request."
             };
         }
+    }
+
+    private async evaluateExpression(
+        expression: ActionExpression, 
+        context: ExecutionContext,
+        tweet: Tweet
+    ): Promise<any> {
+        if (context.depth > context.maxDepth) {
+            throw new Error('Maximum expression depth exceeded');
+        }
+
+        switch (expression.type) {
+            case 'VALUE':
+                return expression.value;
+
+            case 'ACTION': {
+                const actionName = expression.value as string;
+                const action = this.getActionByName(actionName);
+                
+                if (!action) {
+                    throw new Error(`Unknown action: ${actionName}`);
+                }
+
+                // Check if we have the result cached
+                if (context.results.has(actionName)) {
+                    return context.results.get(actionName);
+                }
+
+                // Execute the action
+                const result = await action.action(
+                    tweet, 
+                    this.runtime, 
+                    expression.parameters || new Map()
+                );
+                
+                // Cache the result
+                context.results.set(actionName, result.data);
+                return result.data;
+            }
+
+            case 'CONDITION': {
+                const [left, operator, right] = expression.children || [];
+                const leftValue = await this.evaluateExpression(left, {
+                    ...context,
+                    depth: context.depth + 1
+                }, tweet);
+                const rightValue = await this.evaluateExpression(right, {
+                    ...context,
+                    depth: context.depth + 1
+                }, tweet);
+
+                switch (operator.value) {
+                    case 'GT': return leftValue > rightValue;
+                    case 'LT': return leftValue < rightValue;
+                    case 'EQ': return leftValue === rightValue;
+                    default: throw new Error(`Unknown operator: ${operator.value}`);
+                }
+            }
+
+            case 'OPERATOR': {
+                const results = await Promise.all(
+                    (expression.children || []).map(child =>
+                        this.evaluateExpression(child, {
+                            ...context,
+                            depth: context.depth + 1
+                        }, tweet)
+                    )
+                );
+
+                switch (expression.operator) {
+                    case 'AND': return results.every(Boolean);
+                    case 'OR': return results.some(Boolean);
+                    case 'ADD': return results.reduce((a, b) => a + b, 0);
+                    case 'SUB': return results.reduce((a, b) => a - b);
+                    case 'MUL': return results.reduce((a, b) => a * b, 1);
+                    case 'DIV': return results.reduce((a, b) => a / b);
+                    default: throw new Error(`Unknown operator: ${expression.operator}`);
+                }
+            }
+
+            default:
+                throw new Error(`Unknown expression type: ${expression.type}`);
+        }
+    }
+
+    private buildActionGraph(actions: IKeywordAction[]): Map<string, Set<string>> {
+        const graph = new Map<string, Set<string>>();
+        
+        for (const action of actions) {
+            if (!graph.has(action.name)) {
+                graph.set(action.name, new Set());
+            }
+            
+            if (action.metadata?.dependencies) {
+                for (const dep of action.metadata.dependencies) {
+                    if (!graph.has(dep)) {
+                        graph.set(dep, new Set());
+                    }
+                    graph.get(dep)?.add(action.name);
+                }
+            }
+        }
+        
+        return graph;
+    }
+
+    private async executeActionGraph(
+        expressions: ActionExpression[],
+        tweet: Tweet
+    ): Promise<Map<string, any>> {
+        const context: ExecutionContext = {
+            variables: new Map(),
+            results: new Map(),
+            errors: [],
+            depth: 0,
+            maxDepth: 10
+        };
+
+        // Build dependency graph
+        const graph = this.buildActionGraph(this.actions);
+        const executed = new Set<string>();
+        const results = new Map<string, any>();
+
+        // Topologically sort and execute actions
+        const executionOrder = this.topologicalSort(graph);
+        
+        for (const actionName of executionOrder) {
+            if (executed.has(actionName)) continue;
+            
+            const action = this.getActionByName(actionName);
+            if (!action) continue;
+
+            try {
+                // Find relevant expressions for this action
+                const actionExpressions = expressions.filter(expr => 
+                    expr.type === 'ACTION' && expr.value === actionName
+                );
+
+                for (const expr of actionExpressions) {
+                    const result = await this.evaluateExpression(expr, context, tweet);
+                    results.set(actionName, result);
+                    executed.add(actionName);
+                }
+            } catch (error) {
+                context.errors.push(error);
+                elizaLogger.error(`Error executing action ${actionName}:`, error);
+            }
+        }
+
+        return results;
+    }
+
+    private topologicalSort(graph: Map<string, Set<string>>): string[] {
+        const visited = new Set<string>();
+        const temp = new Set<string>();
+        const order: string[] = [];
+
+        function visit(node: string) {
+            if (temp.has(node)) {
+                throw new Error('Cyclic dependency detected');
+            }
+            if (visited.has(node)) return;
+
+            temp.add(node);
+            const deps = graph.get(node) || new Set();
+            for (const dep of deps) {
+                visit(dep);
+            }
+            temp.delete(node);
+            visited.add(node);
+            order.unshift(node);
+        }
+
+        for (const node of graph.keys()) {
+            if (!visited.has(node)) {
+                visit(node);
+            }
+        }
+
+        return order;
     }
 }
 

@@ -4,268 +4,243 @@ import {
     elizaLogger,
     type Memory,
     type Content,
-    stringToUuid
+    stringToUuid,
+    getEmbeddingZeroVector
 } from "@elizaos/core";
 import { ClientBase } from "../base";
-import { MovebotPlugin } from "./MovebotPlugin";
 import { TwitterInteractionClient } from "../interactions";
-import { SearchMode } from "agent-twitter-client";
 import { buildConversationThread, sendTweet } from "../utils";
+import { KeywordActionPlugin } from "./KeywordActionPlugin";
+import { SearchMode } from "agent-twitter-client";
 import { TokenTransferPlugin } from "./TokenTransferPlugin";
+import { WalletManagementPlugin } from "./WalletManagementPlugin";
 
 export class MovebotService extends TwitterInteractionClient {
-    private movebotPlugin: MovebotPlugin;
+    private keywordPlugin: KeywordActionPlugin;
     private tokenTransferPlugin: TokenTransferPlugin;
-    private lastProcessedTweetId: string | null = null;
+    private walletManagementPlugin: WalletManagementPlugin;
     private processingLock: boolean = false;
     private static readonly BATCH_SIZE = 20;
+    private isRunning: boolean = false;
+    private retryCount: number = 0;
+    private maxRetries: number = 3;
+    protected static readonly PROCESSING_INTERVAL = 600; // 10 minutes
+    private lastProcessedTweetId: string | null = null;
 
     constructor(client: ClientBase, runtime: IAgentRuntime) {
         super(client, runtime);
-        this.tokenTransferPlugin = new TokenTransferPlugin(client, runtime);
-        this.movebotPlugin = new MovebotPlugin(client, runtime);
+        this.keywordPlugin = new KeywordActionPlugin(client, runtime);
+        this.tokenTransferPlugin = new TokenTransferPlugin();
+        this.walletManagementPlugin = new WalletManagementPlugin();
         
-        // Register token transfer actions with the movebot plugin
-        const tokenActions = this.tokenTransferPlugin.getRegisteredActions();
-        tokenActions.forEach(action => this.movebotPlugin.registerKeywordAction(action));
+        // Initialize and register both plugins
+        Promise.all([
+            this.tokenTransferPlugin.initialize(client, runtime),
+            this.walletManagementPlugin.initialize(client, runtime)
+        ]).then(() => {
+            this.keywordPlugin.registerPlugin(this.tokenTransferPlugin);
+            this.keywordPlugin.registerPlugin(this.walletManagementPlugin);
+            elizaLogger.info("MovebotService: All plugins registered");
+        }).catch(error => {
+            elizaLogger.error("MovebotService: Failed to initialize plugins:", error);
+        });
         
-        elizaLogger.info("MovebotService: Initialized with TokenTransferPlugin");
+        elizaLogger.info("MovebotService: Initialized");
     }
 
-    private async fetchRelevantTweets(): Promise<Tweet[]> {
-        try {
-            // Ensure we're logged in before making any API calls
-            if (!await this.ensureLogin()) {
-                elizaLogger.error("MovebotService: Failed to ensure login, will retry in next cycle");
-                return [];
-            }
+    private async createMemoryFromTweet(tweet: Tweet): Promise<Memory> {
+        const userId = stringToUuid(tweet.userId);
+        const roomId = stringToUuid(tweet.id + "-" + this.runtime.agentId);
 
-            elizaLogger.info("MovebotService: Starting to fetch mentions");
-            const username = this.client.twitterConfig.TWITTER_USERNAME;
-            
-            // Use the request queue to handle rate limiting
-            const mentionsResponse = await this.client.requestQueue.add(async () => {
-                try {
-                    const response = await this.client.fetchSearchTweets(
-                        `@${username}`,
-                        MovebotService.BATCH_SIZE,
-                        SearchMode.Latest
-                    );
-                    return response;
-                } catch (error) {
-                    elizaLogger.error("MovebotService: Error fetching mentions:", {
-                        error: error.message,
-                        stack: error.stack
-                    });
-                    return { tweets: [] };
-                }
-            });
+        // Ensure connection exists
+        await this.runtime.ensureConnection(
+            userId,
+            roomId,
+            tweet.username,
+            tweet.name,
+            "twitter"
+        );
 
-            if (!mentionsResponse.tweets || mentionsResponse.tweets.length === 0) {
-                elizaLogger.debug("MovebotService: No mentions found");
-                return [];
-            }
-
-            // Filter out tweets we've already processed
-            const newTweets = this.lastProcessedTweetId
-                ? mentionsResponse.tweets.filter(t => BigInt(t.id) > BigInt(this.lastProcessedTweetId))
-                : mentionsResponse.tweets;
-
-            if (newTweets.length > 0) {
-                // Update the last processed ID to the most recent tweet
-                this.lastProcessedTweetId = newTweets[0].id;
-                elizaLogger.info(`MovebotService: Found ${newTweets.length} new mentions to process`);
-            }
-
-            return newTweets;
-        } catch (error) {
-            elizaLogger.error("MovebotService: Error fetching mentions:", {
-                error: error.message,
-                stack: error.stack
-            });
-            return [];
-        }
+        return {
+            id: stringToUuid(tweet.id + "-" + this.runtime.agentId),
+            userId,
+            agentId: this.runtime.agentId,
+            roomId,
+            content: {
+                text: tweet.text || "",
+                url: tweet.permanentUrl,
+                source: "twitter",
+                inReplyTo: tweet.inReplyToStatusId
+                    ? stringToUuid(tweet.inReplyToStatusId + "-" + this.runtime.agentId)
+                    : undefined,
+            },
+            embedding: getEmbeddingZeroVector(),
+            createdAt: tweet.timestamp * 1000
+        };
     }
 
-    private async processSingleTweet(tweet: Tweet): Promise<void> {
-        try {
-            elizaLogger.info(`MovebotService: Processing tweet ${tweet?.id}`);
-            if (!tweet?.userId || !tweet?.id) {
-                elizaLogger.warn("MovebotService: Invalid tweet object, skipping:", tweet);
-                return;
-            }
-
-            const memoryId = stringToUuid(tweet.id + "-" + this.runtime.agentId);
-            
-            // Check if we've already processed this tweet
-            const existingMemory = await this.runtime.messageManager.getMemoryById(memoryId);
-            if (existingMemory) {
-                elizaLogger.debug("MovebotService: Tweet already processed, skipping:", tweet.id);
-                return;
-            }
-
-            elizaLogger.info(`MovebotService: Processing new tweet from @${tweet.username}`);
-            const userId = stringToUuid(tweet.userId);
-            const roomId = stringToUuid(tweet.id + "-" + this.runtime.agentId);
-
-            // Ensure user connection exists with fallback values
-            await this.runtime.ensureConnection(
-                userId,
-                roomId,
-                tweet.username || "unknown_user",
-                tweet.name || "Unknown User",
-                "twitter"
-            );
-
-            // Create memory object
-            const memory: Memory = {
-                id: memoryId,
-                userId,
-                content: {
-                    text: tweet.text || "",
-                    url: tweet.permanentUrl,
-                    source: "twitter",
-                    inReplyTo: tweet.inReplyToStatusId
-                        ? stringToUuid(tweet.inReplyToStatusId + "-" + this.runtime.agentId)
-                        : undefined,
-                },
-                agentId: this.runtime.agentId,
-                roomId,
-                embedding: null,
-                createdAt: tweet.timestamp ? tweet.timestamp * 1000 : Date.now(),
-            };
-
-            // Save memory
-            await this.runtime.messageManager.createMemory(memory);
-
-            // Build conversation thread
-            const thread = await buildConversationThread(tweet, this.client);
-
-            // Process the tweet through Movebot's handler
-            await this.handleTweet({ 
-                tweet, 
-                message: memory, 
-                thread: Array.isArray(thread) ? thread : [] 
-            });
-
-        } catch (error) {
-            elizaLogger.error("MovebotService: Error processing tweet:", {
-                tweetId: tweet?.id,
-                error: error.message,
-                stack: error.stack
-            });
-            throw error;
-        }
-    }
-
-    public override async start(): Promise<void> {
-        elizaLogger.info("MovebotService: Starting service");
-        
-        // Initial login attempt
+    public async start() {
         if (!await this.ensureLogin()) {
-            elizaLogger.error("MovebotService: Failed to initialize, retrying in 30 seconds");
+            elizaLogger.error("Failed to initialize MovebotService, retrying in 30 seconds");
             setTimeout(() => this.start(), 30000);
             return;
         }
 
-        const processTweets = async () => {
+        // Ensure we have a valid profile
+        if (!this.client.profile) {
+            try {
+                const username = this.client.twitterConfig.TWITTER_USERNAME;
+                this.client.profile = await this.client.fetchProfile(username);
+                elizaLogger.info("MovebotService: Fetched profile successfully");
+            } catch (error) {
+                elizaLogger.error("Failed to fetch Twitter profile, retrying in 30 seconds:", error);
+                setTimeout(() => this.start(), 30000);
+                return;
+            }
+        }
+
+        elizaLogger.info("MovebotService: Starting service");
+        this.isRunning = true;
+
+        const handleTwitterInteractionsLoop = async () => {
             if (this.processingLock) {
-                elizaLogger.debug("MovebotService: Tweet processing already in progress, skipping");
+                elizaLogger.debug("Tweet processing already in progress, skipping");
                 return;
             }
 
-            elizaLogger.info("MovebotService: Starting tweet processing cycle");
             this.processingLock = true;
-            
             try {
-                const tweets = await this.fetchRelevantTweets();
-                elizaLogger.info(`MovebotService: Processing batch of ${tweets.length} tweets`);
+                const botUsername = this.client.twitterConfig.TWITTER_USERNAME;
+                elizaLogger.info("Searching for mentions...");
                 
-                for (const tweet of tweets) {
+                // Ensure profile is still valid
+                if (!this.client.profile) {
+                    elizaLogger.warn("Profile not found, attempting to refresh...");
+                    this.client.profile = await this.client.fetchProfile(botUsername);
+                }
+                
+                const searchResults = await this.safeApiCall(() => 
+                    this.client.fetchSearchTweets(
+                        `@${botUsername}`,
+                        MovebotService.BATCH_SIZE,
+                        SearchMode.Latest
+                    )
+                );
+                
+                // Add debug logging
+                elizaLogger.debug("Search results:", {
+                    success: !!searchResults?.tweets,
+                    length: searchResults?.tweets?.length || 0
+                });
+                
+                if (!searchResults?.tweets || searchResults.tweets.length === 0) {
+                    elizaLogger.debug("No mentions found");
+                    this.retryCount = 0; // Reset retry count as this is a valid state
+                    return;
+                }
+
+                for (const tweet of searchResults.tweets) {
                     try {
-                        await this.processSingleTweet(tweet);
+                        // Skip if we've already processed this tweet
+                        if (this.lastProcessedTweetId && tweet.id <= this.lastProcessedTweetId) {
+                            elizaLogger.debug("Tweet already processed, skipping:", tweet.id);
+                            continue;
+                        }
+
+                        // Validate tweet object
+                        if (!tweet || !tweet.userId || !tweet.id) {
+                            elizaLogger.warn("Invalid tweet object:", tweet);
+                            continue;
+                        }
+
+                        // Check if tweet has already been processed
+                        const memoryId = stringToUuid(tweet.id + "-" + this.runtime.agentId);
+                        const existingMemory = await this.runtime.messageManager.getMemoryById(memoryId);
+                        if (existingMemory) {
+                            elizaLogger.debug("Tweet already processed, skipping:", tweet.id);
+                            continue;
+                        }
+
+                        elizaLogger.debug("Processing mention:", {
+                            id: tweet.id,
+                            username: tweet.username,
+                            text: tweet.text?.substring(0, 50) // Log first 50 chars
+                        });
+
+                        // Create memory object for the tweet
+                        const memory = await this.createMemoryFromTweet(tweet);
+
+                        // Save the memory
+                        await this.runtime.messageManager.createMemory(memory);
+
+                        // Build conversation thread for context
+                        const thread = await this.safeApiCall(() => 
+                            buildConversationThread(tweet, this.client)
+                        ) || [];
+                        
+                        // Process the tweet
+                        await this.handleTweet({
+                            tweet,
+                            message: memory,
+                            thread
+                        });
+
+                        // Update last processed tweet ID
+                        this.lastProcessedTweetId = tweet.id;
+
+                        // Cache the tweet as processed
+                        await this.client.cacheTweet(tweet);
+
                     } catch (tweetError) {
-                        elizaLogger.error("MovebotService: Error processing tweet:", {
+                        elizaLogger.error("Error processing individual tweet:", {
                             tweetId: tweet?.id,
-                            error: tweetError.message,
-                            stack: tweetError.stack
+                            error: tweetError instanceof Error ? tweetError.message : String(tweetError),
+                            stack: tweetError instanceof Error ? tweetError.stack : undefined,
+                            tweet: {
+                                id: tweet?.id,
+                                username: tweet?.username,
+                                text: tweet?.text?.substring(0, 50)
+                            }
                         });
                         continue;
                     }
                 }
+                
+                elizaLogger.info("Finished processing Twitter mentions");
+                this.retryCount = 0; // Reset retry count on successful execution
             } catch (error) {
-                elizaLogger.error("MovebotService: Error in processing cycle:", {
-                    error: error.message,
-                    stack: error.stack
+                elizaLogger.error("MovebotService: Error in main loop:", {
+                    error: error instanceof Error ? error.message : String(error),
+                    stack: error instanceof Error ? error.stack : undefined,
+                    retryCount: this.retryCount,
+                    isRunning: this.isRunning,
+                    processingLock: this.processingLock
                 });
+                
+                this.retryCount++;
+                if (this.retryCount >= this.maxRetries) {
+                    elizaLogger.error("MovebotService: Max retries reached, stopping service", {
+                        totalRetries: this.retryCount,
+                        maxRetries: this.maxRetries
+                    });
+                    await this.stop();
+                    return;
+                }
+                
+                // Exponential backoff for retries
+                const backoffTime = Math.min(1000 * Math.pow(2, this.retryCount), 60000);
+                elizaLogger.info(`Retrying in ${backoffTime}ms (attempt ${this.retryCount} of ${this.maxRetries})`);
+                await new Promise(resolve => setTimeout(resolve, backoffTime));
             } finally {
                 this.processingLock = false;
-                elizaLogger.info("MovebotService: Released processing lock");
             }
         };
 
         // Initial processing
-        await processTweets();
+        await handleTwitterInteractionsLoop();
 
         // Set up interval for subsequent processing
-        const interval = setInterval(async () => {
-            try {
-                await processTweets();
-            } catch (error) {
-                elizaLogger.error("MovebotService: Error in processing interval:", error);
-                // If we hit a critical error, try to restart the service
-                clearInterval(interval);
-                await this.start();
-            }
-        }, TwitterInteractionClient.PROCESSING_INTERVAL);
-
-        elizaLogger.info(`MovebotService: Set up processing interval (${TwitterInteractionClient.PROCESSING_INTERVAL}ms)`);
-    }
-
-    protected override async ensureLogin(): Promise<boolean> {
-        try {
-            // First check if we're already logged in
-            if (await this.client.twitterClient.isLoggedIn()) {
-                return true;
-            }
-
-            elizaLogger.info("MovebotService: Attempting to refresh login");
-            
-            // Try to use cached cookies first
-            const username = this.client.twitterConfig.TWITTER_USERNAME;
-            const cachedCookies = await this.client.getCachedCookies(username);
-            
-            if (cachedCookies) {
-                await this.client.setCookiesFromArray(cachedCookies);
-                if (await this.client.twitterClient.isLoggedIn()) {
-                    elizaLogger.info("MovebotService: Successfully logged in with cached cookies");
-                    return true;
-                }
-            }
-
-            // If cached cookies didn't work, do a fresh login
-            const password = this.client.twitterConfig.TWITTER_PASSWORD;
-            const email = this.client.twitterConfig.TWITTER_EMAIL;
-            const twitter2faSecret = this.client.twitterConfig.TWITTER_2FA_SECRET;
-
-            await this.client.twitterClient.login(username, password, email, twitter2faSecret);
-            
-            if (await this.client.twitterClient.isLoggedIn()) {
-                elizaLogger.info("MovebotService: Successfully logged in with fresh credentials");
-                // Cache the new cookies
-                await this.client.cacheCookies(username, await this.client.twitterClient.getCookies());
-                return true;
-            }
-
-            elizaLogger.error("MovebotService: Failed to login after all attempts");
-            return false;
-        } catch (error) {
-            elizaLogger.error("MovebotService: Error during login:", {
-                error: error.message,
-                stack: error.stack
-            });
-            return false;
-        }
+        setInterval(handleTwitterInteractionsLoop, MovebotService.PROCESSING_INTERVAL);
     }
 
     public override async handleTweet({
@@ -283,15 +258,78 @@ export class MovebotService extends TwitterInteractionClient {
                 return { text: "", action: "IGNORE" };
             }
 
-            // First try to process with Movebot plugin
+            // Process with KeywordActionPlugin directly
             const result = await this.safeApiCall(async () => 
-                this.movebotPlugin.processSingleTweet(tweet, thread)
+                this.keywordPlugin.processTweet(tweet)
             );
             
-            if (result) {
-                elizaLogger.info("MovebotService: Plugin processing result:", result);
+            // Handle null/undefined result from safeApiCall
+            if (!result) {
+                elizaLogger.warn("No result from keyword plugin processing:", {
+                    tweetId: tweet.id,
+                    text: tweet.text
+                });
+                return {
+                    text: "I'm having trouble processing your request right now. Please try again later.",
+                    action: "ERROR"
+                };
+            }
+            
+            if (result.hasAction) {
+                elizaLogger.info("MovebotService: Plugin processing result:", {
+                    action: result.action,
+                    needsMoreInput: result.needsMoreInput,
+                    hasResponse: !!result.response,
+                    results: result.results
+                });
                 
-                // Send the response back to the user
+                // If we need more input, just send the response asking for it
+                if (result.needsMoreInput) {
+                    if (result.response) {
+                        await this.safeApiCall(async () => {
+                            await sendTweet(
+                                this.client,
+                                { text: result.response },
+                                message.roomId,
+                                this.client.twitterConfig.TWITTER_USERNAME,
+                                tweet.id
+                            );
+                        });
+                    }
+                    return {
+                        text: result.response || "Need more information",
+                        action: "NEED_INPUT"
+                    };
+                }
+
+                // Handle multiple action results
+                if (result.results && result.results.length > 0) {
+                    // Combine all responses
+                    const combinedResponse = result.results
+                        .map(r => r.response)
+                        .filter(Boolean)
+                        .join("\n\n");
+
+                    // Send the combined response
+                    if (combinedResponse) {
+                        await this.safeApiCall(async () => {
+                            await sendTweet(
+                                this.client,
+                                { text: combinedResponse },
+                                message.roomId,
+                                this.client.twitterConfig.TWITTER_USERNAME,
+                                tweet.id
+                            );
+                        });
+                    }
+
+                    return {
+                        text: combinedResponse || "",
+                        action: "MULTI_ACTION_COMPLETE"
+                    };
+                }
+
+                // Single action response
                 if (result.response) {
                     await this.safeApiCall(async () => {
                         await sendTweet(
@@ -310,10 +348,17 @@ export class MovebotService extends TwitterInteractionClient {
                 };
             }
 
-            // If no Movebot-specific action was taken, fall back to parent class handling
+            // If no keyword action was taken, fall back to parent class handling
             return super.handleTweet({ tweet, message, thread });
         } catch (error) {
-            elizaLogger.error("Error in MovebotService handleTweet:", error);
+            elizaLogger.error("Error in MovebotService handleTweet:", {
+                error: error instanceof Error ? error.message : String(error),
+                stack: error instanceof Error ? error.stack : undefined,
+                tweet: {
+                    id: tweet?.id,
+                    text: tweet?.text?.substring(0, 50)
+                }
+            });
             return {
                 text: "I encountered an error processing your request. Could you try again?",
                 action: "ERROR"
@@ -321,21 +366,9 @@ export class MovebotService extends TwitterInteractionClient {
         }
     }
 
-    public registerKeywordAction(
-        name: string,
-        description: string,
-        examples: string[],
-        action: (tweet: Tweet, runtime: IAgentRuntime, params?: Map<string, string>) => Promise<{
-            response: string;
-            data?: any;
-            action?: string;
-        }>
-    ) {
-        this.movebotPlugin.registerKeywordAction({
-            name,
-            description,
-            examples,
-            action
-        });
+    public async stop(): Promise<void> {
+        elizaLogger.info("MovebotService: Stopping service");
+        this.isRunning = false;
+        elizaLogger.info("MovebotService: Service stopped");
     }
 } 

@@ -1,4 +1,6 @@
 import { defineConfig } from "tsup";
+import { builtinModules } from "module";
+import pkg from "./package.json";
 
 export default defineConfig({
     entry: ["src/index.ts"],
@@ -6,15 +8,46 @@ export default defineConfig({
     sourcemap: true,
     clean: true,
     format: ["esm"], // Ensure you're targeting CommonJS
-    external: [
-        "dotenv", // Externalize dotenv to prevent bundling
-        "fs", // Externalize fs to use Node.js built-in module
-        "path", // Externalize other built-ins if necessary
-        "@reflink/reflink",
-        "@node-llama-cpp",
-        "https",
-        "http",
-        "agentkeepalive",
-        // Add other modules you want to externalize
+    dts: true,
+    splitting: false,
+    minify: false,
+    platform: "node",
+    target: "node23",
+
+    // Bundle problematic packages
+    noExternal: [
+        "agent-twitter-client",
+        "got",
+        "form-data",
+        "combined-stream",
+        "delayed-stream",
+        "mime-types",
+        "mime-db",
+        "asynckit",
+        "url"
     ],
+
+    external: [
+        ...builtinModules.filter(mod => mod !== "url"),
+        ...Object.keys(pkg.dependencies || {})
+            .filter(dep => !["agent-twitter-client", "got", "form-data", "combined-stream", 
+                           "delayed-stream", "mime-types", "mime-db", "asynckit"].includes(dep))
+    ],
+
+    esbuildOptions: (options) => {
+        options.mainFields = ["module", "main"];
+        options.banner = {
+            js: `
+                import { createRequire } from "module";
+                import { fileURLToPath } from "url";
+                import { dirname } from "path";
+                const require = createRequire(import.meta.url);
+                const __filename = fileURLToPath(import.meta.url);
+                const __dirname = dirname(__filename);
+            `
+        };
+        options.define = {
+            "process.env.NODE_ENV": '"production"'
+        };
+    }
 });

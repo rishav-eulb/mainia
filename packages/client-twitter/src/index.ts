@@ -74,7 +74,7 @@ class TwitterManager implements Client {
         // }
 
         // Start the interaction client
-        await this.interaction.start();
+       // await this.interaction.start();
        
         // // Start the space client if enabled
         // if (this.space) {
@@ -99,6 +99,10 @@ class TwitterManager implements Client {
         }
 
         // Stop the movebot service if enabled
+        if (this.movebotService) {
+            await this.movebotService.stop();
+            elizaLogger.log("Movebot service stopped");
+        }
 
         elizaLogger.log("Twitter client stopped");
     }
@@ -116,5 +120,4 @@ export async function createTwitterClient(
 export * from "./environment.ts";
 export * from "./plugins/KeywordActionPlugin";
 export * from "./plugins/TwitterKeywordService";
-export * from "./plugins/MovebotPlugin";
 export * from "./plugins/MovebotService";

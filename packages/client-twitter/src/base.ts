@@ -782,7 +782,7 @@ export class ClientBase extends EventEmitter {
     async loadLatestCheckedTweetId(): Promise<void> {
         const latestCheckedTweetId =
             await this.runtime.cacheManager.get<string>(
-                `twitter/${this.profile.username}/latest_checked_tweet_id`
+                `twitter/${this.twitterConfig.TWITTER_USERNAME}/latest_checked_tweet_id`
             );
 
         if (latestCheckedTweetId) {
@@ -793,7 +793,7 @@ export class ClientBase extends EventEmitter {
     async cacheLatestCheckedTweetId() {
         if (this.lastCheckedTweetId) {
             await this.runtime.cacheManager.set(
-                `twitter/${this.profile.username}/latest_checked_tweet_id`,
+                `twitter/${this.twitterConfig.TWITTER_USERNAME}/latest_checked_tweet_id`,
                 this.lastCheckedTweetId.toString()
             );
         }
@@ -801,15 +801,14 @@ export class ClientBase extends EventEmitter {
 
     async getCachedTimeline(): Promise<Tweet[] | undefined> {
         return await this.runtime.cacheManager.get<Tweet[]>(
-            `twitter/${this.profile.username}/timeline`
+            `twitter/${this.twitterConfig.TWITTER_USERNAME}/timeline`
         );
     }
 
     async cacheTimeline(timeline: Tweet[]) {
         await this.runtime.cacheManager.set(
-            `twitter/${this.profile.username}/timeline`,
-            timeline,
-            { expires: Date.now() + 10 * 1000 }
+            `twitter/${this.twitterConfig.TWITTER_USERNAME}/timeline`,
+            timeline
         );
     }
 
@@ -821,17 +820,36 @@ export class ClientBase extends EventEmitter {
         );
     }
 
-    async getCachedCookies(username: string) {
-        return await this.runtime.cacheManager.get<any[]>(
-            `twitter/${username}/cookies`
+    async cacheCookies(username: string, cookies: any[]) {
+        // Add expiration time for cookies - 6 hours from now
+        const expirationTime = Date.now() + (6 * 60 * 60 * 1000);
+        await this.runtime.cacheManager.set(
+            `twitter/${username}/cookies`,
+            {
+                cookies,
+                expirationTime
+            }
         );
     }
 
-    async cacheCookies(username: string, cookies: any[]) {
-        await this.runtime.cacheManager.set(
-            `twitter/${username}/cookies`,
-            cookies
-        );
+    async getCachedCookies(username: string) {
+        const cachedData = await this.runtime.cacheManager.get<{
+            cookies: any[],
+            expirationTime: number
+        }>(`twitter/${username}/cookies`);
+
+        if (!cachedData) {
+            return null;
+        }
+
+        // Check if cookies are still valid
+        if (Date.now() > cachedData.expirationTime) {
+            elizaLogger.info("Cached cookies have expired");
+            await this.runtime.cacheManager.delete(`twitter/${username}/cookies`);
+            return null;
+        }
+
+        return cachedData.cookies;
     }
 
     async fetchProfile(username: string): Promise<TwitterProfile> {
