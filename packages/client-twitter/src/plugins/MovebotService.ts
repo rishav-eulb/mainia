@@ -279,8 +279,7 @@ export class MovebotService extends TwitterInteractionClient {
                 elizaLogger.info("MovebotService: Plugin processing result:", {
                     action: result.action,
                     needsMoreInput: result.needsMoreInput,
-                    hasResponse: !!result.response,
-                    results: result.results
+                    hasResponse: !!result.response
                 });
                 
                 // If we need more input, just send the response asking for it
@@ -302,34 +301,7 @@ export class MovebotService extends TwitterInteractionClient {
                     };
                 }
 
-                // Handle multiple action results
-                if (result.results && result.results.length > 0) {
-                    // Combine all responses
-                    const combinedResponse = result.results
-                        .map(r => r.response)
-                        .filter(Boolean)
-                        .join("\n\n");
-
-                    // Send the combined response
-                    if (combinedResponse) {
-                        await this.safeApiCall(async () => {
-                            await sendTweet(
-                                this.client,
-                                { text: combinedResponse },
-                                message.roomId,
-                                this.client.twitterConfig.TWITTER_USERNAME,
-                                tweet.id
-                            );
-                        });
-                    }
-
-                    return {
-                        text: combinedResponse || "",
-                        action: "MULTI_ACTION_COMPLETE"
-                    };
-                }
-
-                // Single action response
+                // Send the response back to the user
                 if (result.response) {
                     await this.safeApiCall(async () => {
                         await sendTweet(
