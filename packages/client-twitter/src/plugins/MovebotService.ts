@@ -14,11 +14,19 @@ import { KeywordActionPlugin } from "./KeywordActionPlugin";
 import { SearchMode } from "agent-twitter-client";
 import { TokenTransferPlugin } from "./TokenTransferPlugin";
 import { WalletManagementPlugin } from "./WalletManagementPlugin";
+import { TokenFungibleTransferPlugin } from "./TokenFungibleTransferPlugin";
+import { TokenOwnershipTransferPlugin } from "./TokenOwnershipTransferPlugin";
+import { TokenCreationPlugin } from "./TokenCreationPlugin";
+import { ImageGenerationPlugin } from "./ImageGenerationPlugin";
 
 export class MovebotService extends TwitterInteractionClient {
     private keywordPlugin: KeywordActionPlugin;
     private tokenTransferPlugin: TokenTransferPlugin;
     private walletManagementPlugin: WalletManagementPlugin;
+    private tokenFungibleTransferPlugin: TokenFungibleTransferPlugin;
+    private tokenOwnershipTransferPlugin: TokenOwnershipTransferPlugin;
+    private tokenCreationPlugin: TokenCreationPlugin;
+    private imageGenerationPlugin: ImageGenerationPlugin;
     private processingLock: boolean = false;
     private static readonly BATCH_SIZE = 20;
     private isRunning: boolean = false;
@@ -32,14 +40,26 @@ export class MovebotService extends TwitterInteractionClient {
         this.keywordPlugin = new KeywordActionPlugin(client, runtime);
         this.tokenTransferPlugin = new TokenTransferPlugin();
         this.walletManagementPlugin = new WalletManagementPlugin();
+        this.tokenFungibleTransferPlugin = new TokenFungibleTransferPlugin();
+        this.tokenOwnershipTransferPlugin = new TokenOwnershipTransferPlugin();
+        this.tokenCreationPlugin = new TokenCreationPlugin();
+        this.imageGenerationPlugin = new ImageGenerationPlugin();
         
-        // Initialize and register both plugins
+        // Initialize and register all plugins
         Promise.all([
             this.tokenTransferPlugin.initialize(client, runtime),
-            this.walletManagementPlugin.initialize(client, runtime)
+            this.walletManagementPlugin.initialize(client, runtime),
+            this.tokenFungibleTransferPlugin.initialize(client, runtime),
+            this.tokenOwnershipTransferPlugin.initialize(client, runtime),
+            this.tokenCreationPlugin.initialize(client, runtime),
+            this.imageGenerationPlugin.initialize(client, runtime)
         ]).then(() => {
             this.keywordPlugin.registerPlugin(this.tokenTransferPlugin);
             this.keywordPlugin.registerPlugin(this.walletManagementPlugin);
+            this.keywordPlugin.registerPlugin(this.tokenFungibleTransferPlugin);
+            this.keywordPlugin.registerPlugin(this.tokenOwnershipTransferPlugin);
+            this.keywordPlugin.registerPlugin(this.tokenCreationPlugin);
+            this.keywordPlugin.registerPlugin(this.imageGenerationPlugin);
             elizaLogger.info("MovebotService: All plugins registered");
         }).catch(error => {
             elizaLogger.error("MovebotService: Failed to initialize plugins:", error);

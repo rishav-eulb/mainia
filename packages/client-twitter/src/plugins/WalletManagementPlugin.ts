@@ -18,7 +18,7 @@ import { MOVEMENT_NETWORK_CONFIG, DEFAULT_NETWORK } from "../constants";
 
 export interface WalletParams {
     username: string;
-    actions: ('GET_ADDRESS' | 'GET_BALANCE')[];
+    action: 'GET_ADDRESS' | 'GET_BALANCE';
 }
 
 export class WalletManagementPlugin implements IKeywordPlugin {
@@ -127,11 +127,6 @@ export class WalletManagementPlugin implements IKeywordPlugin {
         error?: string;
         action?: string;
         needsRegistration?: boolean;
-        results?: Array<{
-            action: string;
-            data?: string;
-            error?: string;
-        }>;
     }> {
         try {
             const privateKey = this.runtime.getSetting("MOVEMENT_PRIVATE_KEY");
@@ -165,28 +160,26 @@ export class WalletManagementPlugin implements IKeywordPlugin {
             try {
                 // First try to get user's wallet address
                 const userWalletAddress = await this.getUserWalletAddress(params.username, aptosClient, contractAddress);
-                const results = [];
-
-                // Execute each requested action
-                for (const action of params.actions) {
-                    if (action === 'GET_ADDRESS') {
-                        results.push({
-                            action: "ADDRESS_RETRIEVED",
-                            data: userWalletAddress
-                        });
-                    } else if (action === 'GET_BALANCE') {
-                        const balance = await this.getWalletBalance(params.username, aptosClient, contractAddress);
-                        results.push({
-                            action: "BALANCE_RETRIEVED",
-                            data: balance
-                        });
-                    }
+                
+                if (params.action === 'GET_ADDRESS') {
+                    return {
+                        success: true,
+                        address: userWalletAddress,
+                        action: "ADDRESS_RETRIEVED"
+                    };
+                } else if (params.action === 'GET_BALANCE') {
+                    const balance = await this.getWalletBalance(params.username, aptosClient, contractAddress);
+                    return {
+                        success: true,
+                        balance,
+                        action: "BALANCE_RETRIEVED"
+                    };
                 }
 
                 return {
-                    success: true,
-                    results,
-                    action: "MULTI_ACTION_COMPLETE"
+                    success: false,
+                    error: "Invalid action specified",
+                    action: "INVALID_ACTION"
                 };
 
             } catch (error) {
@@ -225,53 +218,35 @@ export class WalletManagementPlugin implements IKeywordPlugin {
                 "@movebot get my wallet balance",
                 "@movebot how much MOVE do I have",
                 "@movebot check my balance",
-                "@movebot create wallet",
-                "@movebot what is my wallet address and balance",
-                "@movebot show my address and balance"
+                "@movebot create wallet"
             ],
             requiredParameters: [],
             action: async (tweet: Tweet, runtime: IAgentRuntime) => {
                 elizaLogger.info("WalletManagementPlugin: Processing wallet action for user:", tweet.username);
                 
-                // Determine actions based on the tweet content
+                // Determine the action based on the tweet content
                 const text = tweet.text.toLowerCase();
-                const actions: ('GET_ADDRESS' | 'GET_BALANCE')[] = [];
-                
-                if (text.includes('address')) {
-                    actions.push('GET_ADDRESS');
-                }
-                if (text.includes('balance')) {
-                    actions.push('GET_BALANCE');
-                }
-                
-                // If no specific action mentioned but asking about wallet, do both
-                if (actions.length === 0 && text.includes('wallet')) {
-                    actions.push('GET_ADDRESS', 'GET_BALANCE');
-                }
+                const action = text.includes('balance') ? 'GET_BALANCE' : 'GET_ADDRESS';
 
                 const params: WalletParams = {
                     username: tweet.username,
-                    actions: actions.length > 0 ? actions : ['GET_ADDRESS', 'GET_BALANCE'] // Default to both if unclear
+                    action
                 };
 
                 const result = await this.stage_execute(params);
 
-                if (result.success && result.results) {
-                    let response = "";
-                    const addressResult = result.results.find(r => r.action === "ADDRESS_RETRIEVED");
-                    const balanceResult = result.results.find(r => r.action === "BALANCE_RETRIEVED");
-
-                    if (addressResult) {
-                        response += `Your custodial wallet address is:\n${addressResult.data}`;
+                if (result.success) {
+                    if (result.address) {
+                        return {
+                            response: `Your custodial wallet address is:\n${result.address}`,
+                            action: "ADDRESS_RETRIEVED"
+                        };
+                    } else if (result.balance) {
+                        return {
+                            response: `Your wallet balance is: ${result.balance} MOVE`,
+                            action: "BALANCE_RETRIEVED"
+                        };
                     }
-                    if (balanceResult) {
-                        if (response) response += "\n\n";
-                        response += `Your wallet balance is: ${balanceResult.data} MOVE`;
-                    }
-                    return {
-                        response,
-                        action: "MULTI_ACTION_COMPLETE"
-                    };
                 } else if (result.needsRegistration) {
                     return {
                         response: "You don't have a wallet registered yet. Reply 'yes' if you'd like to create one.",
@@ -283,6 +258,11 @@ export class WalletManagementPlugin implements IKeywordPlugin {
                         action: "ERROR"
                     };
                 }
+
+                return {
+                    response: "Unable to process your request.",
+                    action: "ERROR"
+                };
             }
         };
 

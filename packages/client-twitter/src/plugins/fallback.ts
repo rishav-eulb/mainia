@@ -74,7 +74,7 @@ export async function executeFallback(
             return {
                 success: true,
                 registrationComplete: true,
-                message: "User registration successful. You can now proceed with the transfer."
+                message: "User registration successful."
             };
         } else if (result.vm_status?.includes("quota_exceeded")) {
             return {

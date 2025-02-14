@@ -74,7 +74,7 @@ export class TokenTransferPlugin implements IKeywordPlugin {
         }
     }
 
-    private async stage_execute(params: TokenTransferParams): Promise<{
+    public async stage_execute(params: TokenTransferParams): Promise<{
         success: boolean;
         transactionId?: string;
         error?: string;
@@ -275,21 +275,21 @@ export class TokenTransferPlugin implements IKeywordPlugin {
             name: "transfer_tokens",
             description: "Transfer tokens to another user",
             examples: [
-                "@radhemfeulb69 send 100 USDC to @user",
-                "@radhemfeulb69 transfer 50 ETH to @recipient",
-                "@radhemfeulb69 send 25 USDC to @alice",
-                "@radhemfeulb69 send 48 USDC to @user",
-                "@radhemfeulb69 transfer 50 ETH to @user",
-                "@radhemfeulb69 send 79 USDC to\n@user",  // Handle newline cases
-                "@radhemfeulb69 transfer 100 to @user",
-                "@radhemfeulb69 send 50 to @user",
+                "@radhemfeulb69 send 100 MOVE to @user",
+                "@radhemfeulb69 transfer 50 MOVE to @recipient",
+                "@radhemfeulb69 send 25 MOVE to @alice",
+                "@radhemfeulb69 send 48 MOVE to @user",
+                "@radhemfeulb69 transfer 50 MOVE to @user",
+                "@radhemfeulb69 send 79 MOVE to\n@user",  // Handle newline cases
+                "@radhemfeulb69 transfer 100 MOVE to @user",
+                "@radhemfeulb69 send 50 MOVE to @user",
                 "@radhemfeulb69 send 30 Move to @user",
                 "@radhemfeulb69 transfer 69 MOVE to @user",
-                "I want to send some tokens",
-                "How do I send tokens?",
-                "Can you help me send tokens?",
-                "I need help transferring tokens",
-                "Show me how to transfer tokens"
+                "I want to send some MOVE tokens",
+                "How do I send move tokens?",
+                "Can you help me send move ?",
+                "I need help transferring move tokens",
+                "Show me how to transfer move"
             ],
             requiredParameters: [
                 {
