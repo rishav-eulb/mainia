@@ -98,7 +98,7 @@ export const models: Models = {
                 maxOutputTokens: 4096,
                 frequency_penalty: 0.4,
                 presence_penalty: 0.4,
-                temperature: 0.7,
+                temperature: 0.0,
             },
             [ModelClass.MEDIUM]: {
                 name:
@@ -109,7 +109,7 @@ export const models: Models = {
                 maxOutputTokens: 4096,
                 frequency_penalty: 0.4,
                 presence_penalty: 0.4,
-                temperature: 0.7,
+                temperature: 0.0,
             },
 
             [ModelClass.LARGE]: {
@@ -121,7 +121,7 @@ export const models: Models = {
                 maxOutputTokens: 4096,
                 frequency_penalty: 0.4,
                 presence_penalty: 0.4,
-                temperature: 0.7,
+                temperature: 0.0,
             },
         },
     },
@@ -1148,6 +1148,15 @@ export const models: Models = {
                 maxInputTokens: 128000,
                 maxOutputTokens: 8192,
                 temperature: 0.7,
+            },
+        },
+    },
+    [ModelProviderName.RECRAFT]: {
+        endpoint: settings.RECRAFT_API_URL || "https://external.api.recraft.ai/v1",
+        model: {
+            [ModelClass.IMAGE]: {
+                name: settings.IMAGE_RECRAFT_MODEL || "recraftv3",
+                style: "realistic_image",
             },
         },
     },

@@ -172,6 +172,7 @@ export type ModelSettings = {
 export type ImageModelSettings = {
     name: string;
     steps?: number;
+    style?: string;
 };
 
 /** Embedding model settings */
@@ -233,6 +234,7 @@ export type Models = {
     [ModelProviderName.INFERA]: Model;
     [ModelProviderName.BEDROCK]: Model;
     [ModelProviderName.ATOMA]: Model;
+    [ModelProviderName.RECRAFT]: Model;
 };
 
 /**
@@ -272,6 +274,7 @@ export enum ModelProviderName {
     INFERA = "infera",
     BEDROCK = "bedrock",
     ATOMA = "atoma",
+    RECRAFT = "recraft",
 }
 
 /**

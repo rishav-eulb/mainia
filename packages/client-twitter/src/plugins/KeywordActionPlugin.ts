@@ -19,6 +19,7 @@ export interface IParameterRequirement {
     prompt: string;
     validator?: (value: string) => boolean;
     extractorTemplate?: string; // Template for parameter extraction
+    optional?: boolean;        // Whether the parameter is optional
 }
 
 // Interface for defining an action that can be triggered by keywords
@@ -130,8 +131,8 @@ export class KeywordActionPlugin {
     private runtime: IAgentRuntime;
     private pendingActions: Map<string, PendingAction> = new Map();
     private TIMEOUT_MS = 5 * 60 * 1000;
-    private MAX_ATTEMPTS = 3;
-    private MAX_CLARIFICATIONS = 2;
+    private MAX_ATTEMPTS = 7;
+    private MAX_CLARIFICATIONS = 4;
 
     constructor(client: ClientBase, runtime: IAgentRuntime) {
         this.client = client;

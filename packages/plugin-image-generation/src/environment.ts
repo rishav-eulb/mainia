@@ -11,6 +11,7 @@ export const imageGenEnvSchema = z
         OPENAI_API_KEY: z.string().optional(),
         VENICE_API_KEY: z.string().optional(),
         LIVEPEER_GATEWAY_URL: z.string().optional(),
+        RECRAFT_API_KEY: z.string().optional(),
     })
     .refine(
         (data) => {
@@ -22,12 +23,13 @@ export const imageGenEnvSchema = z
                 data.FAL_API_KEY ||
                 data.OPENAI_API_KEY ||
                 data.VENICE_API_KEY ||
-                data.LIVEPEER_GATEWAY_URL
+                data.LIVEPEER_GATEWAY_URL ||
+                data.RECRAFT_API_KEY
             );
         },
         {
             message:
-                "At least one of ANTHROPIC_API_KEY, NINETEEN_AI_API_KEY, TOGETHER_API_KEY, HEURIST_API_KEY, FAL_API_KEY, OPENAI_API_KEY, VENICE_API_KEY or LIVEPEER_GATEWAY_URL is required",
+                "At least one of ANTHROPIC_API_KEY, NINETEEN_AI_API_KEY, TOGETHER_API_KEY, HEURIST_API_KEY, FAL_API_KEY, OPENAI_API_KEY, VENICE_API_KEY, LIVEPEER_GATEWAY_URL or RECRAFT_API_KEY is required",
         }
     );
 
@@ -62,6 +64,9 @@ export async function validateImageGenConfig(
             LIVEPEER_GATEWAY_URL:
                 runtime.getSetting("LIVEPEER_GATEWAY_URL") ||
                 process.env.LIVEPEER_GATEWAY_URL,
+            RECRAFT_API_KEY:
+                runtime.getSetting("RECRAFT_API_KEY") ||
+                process.env.RECRAFT_API_KEY,
         };
 
         return imageGenEnvSchema.parse(config);

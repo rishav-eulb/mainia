@@ -82,9 +82,9 @@ class TwitterManager implements Client {
         // }
 
         // Start the keyword service if enabled
-        if (this.keywordService) {
-            await this.keywordService.start();
-        }
+        // if (this.keywordService) {
+        //     await this.keywordService.start();
+        // }
 
         // Start the movebot service if enabled
         if (this.movebotService) {
