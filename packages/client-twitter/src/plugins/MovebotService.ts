@@ -12,7 +12,7 @@ import { TwitterInteractionClient } from "../interactions";
 import { buildConversationThread, sendTweet } from "../utils";
 import { KeywordActionPlugin } from "./KeywordActionPlugin";
 import { SearchMode } from "agent-twitter-client";
-import { WalletTransferPlugin } from "./WalletTransferPlugin";
+import { TokenFungibleTransferPlugin } from "./TokenFungibleTransferPlugin";
 import { WalletManagementPlugin } from "./WalletManagementPlugin";
 import { TokenCreationPlugin } from "./TokenCreationPlugin";
 import { ImageGenerationPlugin } from "./ImageGenerationPlugin";
@@ -22,7 +22,7 @@ import { NFTPlugin } from "./NFTPlugin";
 
 export class MovebotService extends TwitterInteractionClient {
     private keywordPlugin: KeywordActionPlugin;
-    private walletTransferPlugin: WalletTransferPlugin;
+    private tokenFungibleTransferPlugin: TokenFungibleTransferPlugin;
     private walletManagementPlugin: WalletManagementPlugin;
     private tokenCreationPlugin: TokenCreationPlugin;
     private nftPlugin: NFTPlugin;
@@ -39,7 +39,7 @@ export class MovebotService extends TwitterInteractionClient {
     constructor(client: ClientBase, runtime: IAgentRuntime) {
         super(client, runtime);
         this.keywordPlugin = new KeywordActionPlugin(client, runtime);
-        this.walletTransferPlugin = new WalletTransferPlugin();
+        this.tokenFungibleTransferPlugin = new TokenFungibleTransferPlugin();
         this.walletManagementPlugin = new WalletManagementPlugin();
         this.tokenCreationPlugin = new TokenCreationPlugin();
         // this.imageGenerationPlugin = new ImageGenerationPlugin();
@@ -48,13 +48,13 @@ export class MovebotService extends TwitterInteractionClient {
         
         // Initialize and register all plugins
         Promise.all([
-            this.walletTransferPlugin.initialize(client, runtime),
+            this.tokenFungibleTransferPlugin.initialize(client, runtime),
             this.walletManagementPlugin.initialize(client, runtime),
             this.tokenCreationPlugin.initialize(client, runtime),
             this.nftPlugin.initialize(client, runtime)
             // this.imageGenerationPlugin.initialize(client, runtime)
         ]).then(() => {
-            this.keywordPlugin.registerPlugin(this.walletTransferPlugin);
+            this.keywordPlugin.registerPlugin(this.tokenFungibleTransferPlugin);
             this.keywordPlugin.registerPlugin(this.walletManagementPlugin);
             this.keywordPlugin.registerPlugin(this.tokenCreationPlugin);
             this.keywordPlugin.registerPlugin(this.nftPlugin);

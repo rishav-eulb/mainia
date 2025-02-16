@@ -12,12 +12,19 @@ import {
 } from "@elizaos/core";
 import { ClientBase } from "../base";
 
+export interface ValidationPromptRequest {
+    optionalParameterName?: string;
+    optionalParameterPrompt?: string;
+    isValidated: boolean;
+}
+
 // Interface for parameter requirements
 // what is valid parameter for? Is it required?
 export interface IParameterRequirement {
     name: string;
     prompt: string;
     validator?: (value: string, runtime?: IAgentRuntime) => boolean | Promise<boolean>;
+    validatorWithPromptRequest?: (value: string, runtime?: IAgentRuntime) => Promise<ValidationPromptRequest>;
     extractorTemplate?: string; // Template for parameter extraction
 }
 
@@ -29,6 +36,7 @@ export interface IKeywordAction {
     description: string;    // Description of what the action does
     examples: string[];     // Example phrases that indicate this action
     requiredParameters?: IParameterRequirement[];  // Parameters needed for this action
+    optionalParameters?: IParameterRequirement[];  // Parameters needed for this action
     preprocessTweet?: (tweet: Tweet, runtime: IAgentRuntime) => Promise<Map<string, string>>
     action: (tweet: Tweet, runtime: IAgentRuntime, collectedParams?: Map<string, string>) => Promise<{
         response: string;  // The response to send back
@@ -61,6 +69,7 @@ interface PendingAction {
     attempts: number;
     lastParameterPrompt?: string;
     clarificationCount: number;
+    optionalParam?: string;
 }
 
 const intentRecognitionTemplate = `
@@ -337,6 +346,86 @@ export class KeywordActionPlugin {
         }
     }
 
+    async validateExtraction(extraction: any, paramReq: IParameterRequirement, pendingAction: PendingAction): Promise<{
+        hasAction: boolean;
+        response: string;
+        needsMoreInput: boolean;
+        valueSet: boolean;
+        needsOptionalParam: boolean;
+    }>{
+        let promptRequest: ValidationPromptRequest;
+
+        if ((extraction?.extracted || extraction?.optional) && extraction?.confidence !== 'LOW') {
+            if (!paramReq.validator || await paramReq.validator(extraction.value, this.runtime)) {
+                elizaLogger.info("KeywordActionPlugin: Extraction validation:", {
+                    extraction,
+                    key: paramReq.name
+                });
+                pendingAction.collectedParams.set(paramReq.name, extraction.value);
+                pendingAction.conversationContext.push(
+                    `Bot: ${extraction.suggestedPrompt || `Great! I got the ${paramReq.name}.`}`
+                );
+
+                if(pendingAction.optionalParam) {
+                    pendingAction.optionalParam = undefined;
+                }
+
+                return {
+                    valueSet: true,
+                    needsOptionalParam: false,
+                    hasAction: false,
+                    response: "",
+                    needsMoreInput: false,
+                };
+            } else if(paramReq.validatorWithPromptRequest && (
+                    promptRequest = await paramReq.validatorWithPromptRequest(extraction.value, this.runtime)
+                ).isValidated
+            ) {
+                pendingAction.collectedParams.set(paramReq.name, extraction.value);
+                pendingAction.conversationContext.push(
+                    `Bot: ${extraction.suggestedPrompt || `Great! I got the ${paramReq.name}.`}`
+                );
+
+                pendingAction.optionalParam = promptRequest.optionalParameterName;
+
+                return {
+                    valueSet: true,
+                    needsOptionalParam: promptRequest.optionalParameterName ? true : false,
+                    hasAction: true,
+                    response: promptRequest.optionalParameterPrompt,
+                    needsMoreInput: true,
+                }
+            }
+        }
+
+        // Handle clarification needs
+        if (extraction?.clarificationNeeded) {
+            pendingAction.clarificationCount++;
+            if (pendingAction.clarificationCount <= this.MAX_CLARIFICATIONS) {
+                const prompt = extraction.suggestedPrompt || paramReq.prompt;
+                if (prompt !== pendingAction.lastParameterPrompt) {
+                    pendingAction.lastParameterPrompt = prompt;
+                    return {
+                        valueSet: false,
+                        needsOptionalParam: false,
+                        hasAction: true,
+                        response: prompt,
+                        needsMoreInput: true
+                    };
+                }
+            }
+        }
+
+        // If we couldn't extract and haven't asked too many times, ask for it
+        return {
+            valueSet: false,
+            needsOptionalParam: false,
+            hasAction: true,
+            response: paramReq.prompt,
+            needsMoreInput: true
+        };
+    }
+
     // Process a tweet and check for keyword actions
     async processTweet(tweet: Tweet): Promise<{
         hasAction: boolean;
@@ -379,10 +468,10 @@ export class KeywordActionPlugin {
                     const collectedParams = new Map<string, string>();
                     if(actionHandler.preprocessTweet) {
                         try {
-                            const preprocessDetail =  await actionHandler.preprocessTweet(tweet, this.runtime);
+                            const preprocessDetail = await actionHandler.preprocessTweet(tweet, this.runtime);
                             preprocessDetail.forEach((val, key) => {
                                 collectedParams.set(key, val);
-                            })
+                            });
                         } catch (error) {
                             const errorString = error instanceof Error ? error.message : String(error)
                             elizaLogger.error("error in ", errorString); 
@@ -402,7 +491,7 @@ export class KeywordActionPlugin {
                         conversationContext: [`User: ${tweet.text}`],
                         attempts: 0,
                         clarificationCount: 0
-                    }
+                    };
 
                     // Start parameter collection with a natural response
                     this.pendingActions.set(userId, pendingAction);
@@ -410,8 +499,8 @@ export class KeywordActionPlugin {
             }
         }
 
-        let pendingAction = this.pendingActions.get(userId);       
-
+        let pendingAction = this.pendingActions.get(userId);
+        // If there's a pending action, update its context and process it
         if (pendingAction) {
             pendingAction.conversationContext.push(`User: ${tweet.text}`);
             pendingAction.lastPromptTime = Date.now();
@@ -426,7 +515,35 @@ export class KeywordActionPlugin {
                 };
             }
 
-            // Try to extract missing parameters
+            // This should be called only after all the requiredParamaters are fulfilled.
+            if(pendingAction.optionalParam && !pendingAction.collectedParams.has(pendingAction.optionalParam)) {
+                const paramReq = pendingAction.actionHandler.optionalParameters.find(
+                    val => val.name == pendingAction.optionalParam
+                );
+
+                const extraction = await this.extractParameter(
+                    paramReq,
+                    tweet,
+                    pendingAction.conversationContext
+                );
+
+                elizaLogger.info("KeywordActionPlugin: Extraction result:", {
+                    extraction,
+                    key: paramReq.name
+                });
+
+                const validationResult = await this.validateExtraction(extraction, paramReq, pendingAction);
+
+                if (!validationResult.valueSet || validationResult.needsOptionalParam) {
+                    return {
+                        hasAction: validationResult.hasAction,
+                        response: validationResult.response,
+                        needsMoreInput: validationResult.needsMoreInput
+                    }
+                }
+            }
+
+            // Extract all required params
             for (const paramReq of pendingAction.actionHandler.requiredParameters || []) {
                 if (!pendingAction.collectedParams.has(paramReq.name)) {
                     const extraction = await this.extractParameter(
@@ -440,60 +557,16 @@ export class KeywordActionPlugin {
                         key: paramReq.name
                     });
 
-                    if ((extraction?.extracted || extraction?.optional) && extraction?.confidence !== 'LOW') {
-                        if (!paramReq.validator || paramReq.validator(extraction.value, this.runtime)) {
-
-                            elizaLogger.info("KeywordActionPlugin: Extraction validation:", {
-                                extraction,
-                                key: paramReq.name
-                            });
-                            pendingAction.collectedParams.set(paramReq.name, extraction.value);
-                            pendingAction.conversationContext.push(
-                                `Bot: ${extraction.suggestedPrompt || `Great! I got the ${paramReq.name}.`}`
-                            );
-                            continue;
-                        }
-                        else {
-                            pendingAction.clarificationCount++;
-                             if (pendingAction.clarificationCount <= this.MAX_CLARIFICATIONS) {
-                                 const prompt = extraction.suggestedPrompt || paramReq.prompt;
-                                 if (prompt !== pendingAction.lastParameterPrompt) {
-                                   pendingAction.lastParameterPrompt = prompt;
-                                   return {
-                                    hasAction: true,
-                                    response: prompt,
-                                    needsMoreInput: true
-                             };
-                            }
-                        }
-
-
-                        }
+                    const validationResult = await this.validateExtraction(extraction, paramReq, pendingAction);
+                    if (validationResult.valueSet && !validationResult.needsOptionalParam) {
+                        continue;
                     }
 
-                    // Handle clarification needs
-                    if (extraction?.clarificationNeeded) {
-                        pendingAction.clarificationCount++;
-                        if (pendingAction.clarificationCount <= this.MAX_CLARIFICATIONS) {
-                            const prompt = extraction.suggestedPrompt || paramReq.prompt;
-                            if (prompt !== pendingAction.lastParameterPrompt) {
-                                pendingAction.lastParameterPrompt = prompt;
-                                return {
-                                    hasAction: true,
-                                    response: prompt,
-                                    needsMoreInput: true
-                                };
-                            }
-                        }
-                        
-                    }
-
-                    // If we couldn't extract and haven't asked too many times, ask for it
                     return {
-                        hasAction: true,
-                        response: paramReq.prompt,
-                        needsMoreInput: true
-                    };
+                        hasAction: validationResult.hasAction,
+                        response: validationResult.response,
+                        needsMoreInput: validationResult.needsMoreInput
+                    }
                 }
             }
 
@@ -514,7 +587,7 @@ export class KeywordActionPlugin {
                     action: result.action
                 };
             } catch (error) {
-                console.error('Error executing action:', error);
+                elizaLogger.error('Error executing action:', error);
                 this.pendingActions.delete(userId);
                 return {
                     hasAction: true,
@@ -525,8 +598,6 @@ export class KeywordActionPlugin {
 
         return {
             hasAction: false
-        }
+        };
     }
-
-
 }

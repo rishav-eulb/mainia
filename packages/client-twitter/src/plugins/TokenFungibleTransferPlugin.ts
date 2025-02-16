@@ -4,7 +4,7 @@ import {
     elizaLogger,
 } from "@elizaos/core";
 import { ClientBase } from "../base";
-import { type IKeywordPlugin, type IKeywordAction } from "./KeywordActionPlugin";
+import { type IKeywordPlugin, type IKeywordAction, ValidationPromptRequest } from "./KeywordActionPlugin";
 import {
     Account,
     Aptos,
@@ -75,6 +75,37 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
                 error: error instanceof Error ? error.message : String(error),
                 username
             });
+            throw error;
+        }
+    }
+
+    private async createUserWallet(username: string, aptosClient: Aptos, movementAccount: Account, contractAddress: string): Promise<boolean> {
+        try {
+            const createUserTx = await aptosClient.transaction.build.simple({
+                sender: movementAccount.accountAddress.toStringLong(),
+                data: {
+                    function: `${contractAddress}::user::create_user`,
+                    typeArguments: [],
+                    functionArguments: [username],
+                },
+            });
+
+            const createUserCommitted = await aptosClient.signAndSubmitTransaction({
+                signer: movementAccount,
+                transaction: createUserTx,
+            });
+
+            const createUserResult = await aptosClient.waitForTransaction({
+                transactionHash: createUserCommitted.hash,
+                options: {
+                    timeoutSecs: 30,
+                    checkSuccess: true
+                }
+            });
+
+            return createUserResult.success;
+        } catch (error) {
+            elizaLogger.error("Error creating user wallet:", error);
             throw error;
         }
     }
@@ -152,21 +183,20 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
         });
     }
 
-    private async checkVerifiedTokenBalance(
+    private async checkTokenVerified(
         aptosClient: Aptos, 
         contractAddress: string,
-        tuser_id: string, 
         symbol: string
-    ): Promise<{ isVerified: boolean; balance?: string }> {
+    ): Promise<{ isVerified: boolean; metadata?: string }> {
         try {
-            const result = await aptosClient.view({
+            const result = await aptosClient.view<[{ inner: string }]>({
                 payload: {
-                    function: `${contractAddress}::fa_wallet::wallet_fa_balance_for_verified_token`,
+                    function: `${contractAddress}::fa_wallet::get_metadata_for_verified_fa`,
                     typeArguments: [],
-                    functionArguments: [tuser_id, symbol]
+                    functionArguments: [symbol]
                 }
             });
-            return { isVerified: true, balance: result[0] as string };
+            return { isVerified: true, metadata: result[0].inner as string };
         } catch (error) {
             // If error occurs, token is not verified
             return { isVerified: false };
@@ -336,7 +366,44 @@ Previous conversation context:
 }
 
 Only respond with the JSON, no other text.`,
-                    validator: (value: string) => /^[A-Z0-9]{2,10}$/.test(value.toUpperCase())
+                    validatorWithPromptRequest: async (value, runtime): Promise<ValidationPromptRequest> => {
+                        const validationResult = /^[A-Z0-9]{2,10}$/.test(value.toUpperCase());
+                        if(!validationResult) {
+                            return {
+                                isValidated: false
+                            }
+                        }
+
+                        const symbol = value.toUpperCase();
+                        const contractAddress = "0xf17f471f57b12eb5a8bd1d722b385b5f1f0606d07b553828c344fb4949fd2a9d";
+                        const network = MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
+
+                        const aptosClient = new Aptos(
+                            new AptosConfig({
+                                network: Network.CUSTOM,
+                                fullnode: network.fullnode,
+                            })
+                        );
+
+                        // For other tokens, check if verified
+                        const verifiedCheck = await this.checkTokenVerified(
+                            aptosClient,
+                            contractAddress,
+                            symbol
+                        );
+
+                        if(verifiedCheck.isVerified) {
+                            return {
+                                isValidated: true
+                            }
+                        }
+                        
+                        return {
+                            isValidated: true,
+                            optionalParameterName: "symbol",
+                            optionalParameterPrompt: "This token is not verified. Kindly provide the twitter handle of the creator."
+                        }
+                    },
                 },
                 {
                     name: "recipient",
@@ -369,13 +436,29 @@ Previous conversation context:
 
 Only respond with the JSON, no other text.`,
                     validator: (value: string) => /^@?[A-Za-z0-9_]{1,15}$/.test(value) || /^0x[0-9a-fA-F]{64}$/.test(value)
-                }
+                },
             ],
+            optionalParameters: [],
             action: async (tweet: Tweet, runtime: IAgentRuntime, params: Map<string, string>) => {
                 const symbol = params.get("symbol").toUpperCase();
                 const contractAddress = "0xf17f471f57b12eb5a8bd1d722b385b5f1f0606d07b553828c344fb4949fd2a9d";
                 
                 const network = MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
+
+                const privateKey = this.runtime.getSetting("MOVEMENT_PRIVATE_KEY");
+                if (!privateKey) {
+                    throw new Error("Missing MOVEMENT_PRIVATE_KEY configuration");
+                }
+
+                const movementAccount = Account.fromPrivateKey({
+                    privateKey: new Ed25519PrivateKey(
+                        PrivateKey.formatPrivateKey(
+                            privateKey,
+                            PrivateKeyVariants.Ed25519
+                        )
+                    ),
+                });
+
                 const aptosClient = new Aptos(
                     new AptosConfig({
                         network: Network.CUSTOM,
@@ -384,24 +467,57 @@ Only respond with the JSON, no other text.`,
                 );
 
                 // Check if user has a wallet
+                let userWalletAddress = await this.getUserWalletAddress(tweet.username, aptosClient, contractAddress);
+                if(!userWalletAddress) {
+                    const success = await this.createUserWallet(tweet.username, aptosClient, movementAccount, contractAddress);
+                    if(success) {
+                        userWalletAddress = await this.getUserWalletAddress(tweet.username, aptosClient, contractAddress);
+                    }
+                }
                 try {
-                    const userWalletAddress = await this.getUserWalletAddress(tweet.username, aptosClient, contractAddress);
-                    if (!userWalletAddress) {
-                        return {
-                            response: "You don't have a wallet yet. Reply 'create wallet' to create one.",
-                            action: "PROMPT_REGISTRATION"
+                    // Handle MOVE token separately
+                    if (symbol === 'MOVE') {
+                        const transferParams: TokenFungibleTransferParams = {
+                            username: tweet.username,
+                            symbol: symbol,
+                            recipient: params.get("recipient"),
+                            amount: params.get("amount"),
+                            tweetId: tweet.id,
+                            isVerified: true
                         };
+                        
+                        const result = await this.stage_execute(transferParams);
+                        
+                        if (result.success) {
+                            const networkSetting = runtime.getSetting("MOVEMENT_NETWORK") || DEFAULT_NETWORK;
+                            const network = MOVEMENT_NETWORK_CONFIG[networkSetting];
+                            const explorerUrl = `${MOVEMENT_EXPLORER_URL}/${result.transactionId}?network=${network.explorerNetwork}`;
+                            
+                            return {
+                                response: `✅ Transfer successful!\n\nAmount: ${params.get("amount")} ${symbol}\nTo: ${params.get("recipient")}\n\nView transaction: ${explorerUrl}`,
+                                action: "TRANSFER_SUCCESSFUL"
+                            };
+                        } else if (result.error?.includes("0x13001")) {
+                            return {
+                                response: `Your MOVE balance is insufficient. Please top up your wallet first.`,
+                                action: "INSUFFICIENT_BALANCE"
+                            };
+                        } else {
+                            return {
+                                response: result.error || "Transfer failed. Please try again later.",
+                                action: "TRANSFER_FAILED"
+                            };
+                        }
                     }
 
-                    // First check if it's a verified token
-                    const verifiedCheck = await this.checkVerifiedTokenBalance(
+                    // For other tokens, check if verified
+                    const verifiedCheck = await this.checkTokenVerified(
                         aptosClient,
                         contractAddress,
-                        tweet.username,
                         symbol
                     );
 
-                    if (verifiedCheck.isVerified && !params.has("tokenAddress")) {
+                    if (verifiedCheck.isVerified) {
                         // For verified token, proceed with transfer
                         const transferParams: TokenFungibleTransferParams = {
                             username: tweet.username,
@@ -411,7 +527,7 @@ Only respond with the JSON, no other text.`,
                             tweetId: tweet.id,
                             isVerified: true
                         };
-
+                
                         const result = await this.stage_execute(transferParams);
 
                         if (result.success) {
@@ -422,11 +538,6 @@ Only respond with the JSON, no other text.`,
                             return {
                                 response: `✅ Transfer successful!\n\nAmount: ${params.get("amount")} ${symbol}\nTo: ${params.get("recipient")}\n\nView transaction: ${explorerUrl}`,
                                 action: "TRANSFER_SUCCESSFUL"
-                            };
-                        } else if (result.action === "WALLET_REQUIRED") {
-                            return {
-                                response: "You don't have a wallet yet. Reply 'create wallet' to create one.",
-                                action: "PROMPT_REGISTRATION"
                             };
                         } else if (result.error?.includes("0x13001")) {
                             return {
@@ -439,13 +550,14 @@ Only respond with the JSON, no other text.`,
                                 action: "TRANSFER_FAILED"
                             };
                         }
-                    } else if (!verifiedCheck.isVerified && !params.has("tokenAddress")) {
+                    } else if (!verifiedCheck.isVerified && !params.has("tokenAddress") && !params.has("tokenOwner")) {
                         // Token is not verified, ask for token owner
                         return {
-                            response: `${symbol} is a user-created token. Please provide the token owner's username (e.g., "transfer ${symbol} from @owner").`,
-                            action: "COLLECT_TOKEN_OWNER"
+                            response: `${symbol} is a user-created token. Please provide the token owner's username.`,
+                            needsMoreInput: true,
+                            action: "transfer_token"
                         };
-                    } else if (params.has("tokenAddress") && !verifiedCheck.isVerified) {
+                    } else if ((params.has("tokenAddress")|| params.has("tokenOwner")) && !verifiedCheck.isVerified) {
                         // Handle transfer by token address
                         const transferParams: TokenFungibleTransferParams = {
                             username: tweet.username,
@@ -483,7 +595,7 @@ Only respond with the JSON, no other text.`,
                     if (error.message?.includes("0x51001")) {
                         return {
                             response: "You don't have a wallet yet. Reply 'create wallet' to create one.",
-                            action: "PROMPT_REGISTRATION"
+                            action: "ERROR"
                         };
                     }
                     return {
