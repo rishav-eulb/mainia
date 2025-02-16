@@ -319,7 +319,6 @@ export class NFTPlugin implements IKeywordPlugin {
         // Case 2: Tweet is a quote tweet
         if (tweet.quotedStatusId && tweet.quotedStatus) {
             const replyTweet = await this.client.getTweet(tweet.quotedStatusId);
-            elizaLogger.info("quoted tweet object", replyTweet)
             const tweetUrl = replyTweet.permanentUrl
             const imageUri = await this.tweetImageUploader.uploadTweetImage(tweetUrl);
             return { tweetId: tweetUrl, imageUri };
@@ -330,7 +329,6 @@ export class NFTPlugin implements IKeywordPlugin {
             // For replies, we'll use the tweet URL with the original tweet ID
             // The image uploader should be able to resolve the username
             const replyTweet = await this.client.getTweet(tweet.inReplyToStatusId);
-            elizaLogger.info("reply tweet object", replyTweet)
             const tweetUrl = replyTweet.permanentUrl
             const imageUri = await this.tweetImageUploader.uploadTweetImage(tweetUrl);
             return { tweetId: tweet.inReplyToStatusId, imageUri };
