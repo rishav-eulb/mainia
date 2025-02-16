@@ -515,6 +515,8 @@ export class KeywordActionPlugin {
                 };
             }
 
+            const optionalParamMode = pendingAction.optionalParam ? true : false;
+
             // This should be called only after all the requiredParamaters are fulfilled.
             if(pendingAction.optionalParam && !pendingAction.collectedParams.has(pendingAction.optionalParam)) {
                 const paramReq = pendingAction.actionHandler.optionalParameters.find(
@@ -534,11 +536,25 @@ export class KeywordActionPlugin {
 
                 const validationResult = await this.validateExtraction(extraction, paramReq, pendingAction);
 
+                // If value is not set or optional parameter is required then throw a prompt.
                 if (!validationResult.valueSet || validationResult.needsOptionalParam) {
                     return {
                         hasAction: validationResult.hasAction,
                         response: validationResult.response,
                         needsMoreInput: validationResult.needsMoreInput
+                    }
+                }
+
+                const nextParamReq = pendingAction.actionHandler.requiredParameters.find(req =>
+                    !pendingAction.collectedParams.has(req.name)
+                )
+
+                // If optional value has been extracted. Then throw prompt for next required parameter.
+                if (nextParamReq) {
+                    return {
+                        hasAction: true,
+                        response: paramReq.prompt,
+                        needsMoreInput: true,
                     }
                 }
             }

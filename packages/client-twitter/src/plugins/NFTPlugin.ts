@@ -378,10 +378,13 @@ export class NFTPlugin implements IKeywordPlugin {
                     };
 
                     const result = await this.stage_execute(params, "create_nft");
+
+                    const networkSetting = runtime.getSetting("MOVEMENT_NETWORK") || DEFAULT_NETWORK;
+                        const network = MOVEMENT_NETWORK_CONFIG[networkSetting] || MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
                     
                     if (result.success) {
                         return {
-                            response: `✨ Successfully created your NFT!\n\nView transaction: ${MOVEMENT_EXPLORER_URL}/tx/${result.transactionId}`,
+                            response: `✨ Successfully created your NFT!\n\nView transaction: ${MOVEMENT_EXPLORER_URL}/txn/${result.transactionId}?network=${network.explorerNetwork}`,
                             action: "NFT_CREATED"
                         };
                     } else {
@@ -512,9 +515,13 @@ Only respond with the JSON, no other text.`
                         const message = isSelfSoulBound
                             ? `✨ Successfully created soul-bound NFT for yourself!`
                             : `✨ Successfully created soul-bound NFT for ${params.get("recipient")}!`;
+
+                        const networkSetting = runtime.getSetting("MOVEMENT_NETWORK") || DEFAULT_NETWORK;
+                        const network = MOVEMENT_NETWORK_CONFIG[networkSetting] || MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
                             
                         return {
-                            response: `${message}\n\nView transaction: ${MOVEMENT_EXPLORER_URL}/tx/${result.transactionId}`,
+                            
+                            response: `${message}\n\nView transaction: ${MOVEMENT_EXPLORER_URL}/txn/${result.transactionId}?network=${network.explorerNetwork}`,
                             action: "NFT_CREATED"
                         };
                     } else {
@@ -608,8 +615,11 @@ Only respond with the JSON, no other text.`
                             ? params.get("recipient").substring(0, 10) + "..." 
                             : params.get("recipient");
                         
+                        const networkSetting = runtime.getSetting("MOVEMENT_NETWORK") || DEFAULT_NETWORK;
+                        const network = MOVEMENT_NETWORK_CONFIG[networkSetting] || MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
+                        
                         return {
-                            response: `✨ Successfully transferred NFT ${nftName} to ${displayRecipient}!\n\nView transaction: ${MOVEMENT_EXPLORER_URL}/tx/${result.transactionId}`,
+                            response: `✨ Successfully transferred NFT ${nftName} to ${displayRecipient}!\n\nView transaction: ${MOVEMENT_EXPLORER_URL}/txn/${result.transactionId}?network=${network.explorerNetwork}`,
                             action: "NFT_TRANSFERRED"
                         };
                     } else {

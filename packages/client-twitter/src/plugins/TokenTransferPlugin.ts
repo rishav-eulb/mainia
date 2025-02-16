@@ -310,11 +310,11 @@ Only respond with the JSON, no other text.`,
                 },
                 {
                     name: "recipient",
-                    prompt: "Who would you like to send the MOVE tokens to? (Please provide their Twitter username)",
+                    prompt: "Who would you like to send the MOVE tokens to? (Please provide their Twitter username or wallet address)",
                     extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
 
 Parameter to extract: recipient
-Parameter description: Twitter username (starting with @) of the recipient, make sure it is not @radhemfeulb69.
+Parameter description: Twitter username (starting with @) of the recipient, make sure it is not @radhemfeulb69 or wallet address.
 
 User's message:
 {{userMessage}}
@@ -399,7 +399,7 @@ Only respond with the JSON, no other text.`,
                     if (result.success) {
                         const networkSetting = runtime.getSetting("MOVEMENT_NETWORK") || DEFAULT_NETWORK;
                         const network = MOVEMENT_NETWORK_CONFIG[networkSetting];
-                        const explorerUrl = `${MOVEMENT_EXPLORER_URL}/${result.transactionId}?network=${network.explorerNetwork}`;
+                        const explorerUrl = `${MOVEMENT_EXPLORER_URL}/txn${result.transactionId}?network=${network.explorerNetwork}`;
 
                         return {
                             response: `✅ Transfer successful!\n\nAmount: ${amount} MOVE\nTo: @${recipient}\n\nView transaction: ${explorerUrl}`,

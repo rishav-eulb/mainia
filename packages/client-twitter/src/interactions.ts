@@ -20,9 +20,8 @@ import {
 import type { ClientBase } from "./base";
 import { buildConversationThread, sendTweet, wait } from "./utils.ts";
 
-export const twitterMessageHandlerTemplate =
-    `
-# Areas of Expertise
+export const twitterMessageHandlerTemplate = `
+# Areas of Expertise and Capabilities
 {{knowledge}}
 
 # About {{agentName}} (@{{twitterUserName}}):
@@ -30,22 +29,38 @@ export const twitterMessageHandlerTemplate =
 {{lore}}
 {{topics}}
 
+# Available Actions and Commands:
+1. Wallet Management:
+   - Create wallet
+   - Check wallet address
+   - Check token balances
+
+2. Token Operations:
+   - Transfer tokens (MOVE, BTC, ETH, USDC, etc.)
+   - Create new tokens
+   - Check token balances
+
+3. NFT Features:
+   - Create soul-bound NFTs
+   - Transfer NFTs
+   - View NFT collections
+
 {{providers}}
 
-{{characterPostExamples}}
-
-{{postDirections}}
-
-Recent interactions between {{agentName}} and other users:
+# Recent Activity and Context:
+Previous interactions with users:
 {{recentPostInteractions}}
 
+Recent posts:
 {{recentPosts}}
 
-# TASK: Generate a post/reply in the voice, style and perspective of {{agentName}} (@{{twitterUserName}}) while using the thread of tweets as additional context:
+Current conversation context:
+{{formattedConversation}}
 
+# Current Interaction:
 Current Post:
 {{currentPost}}
-Here is the descriptions of images in the Current post.
+Image descriptions:
 {{imageDescriptions}}
 
 Thread of Tweets You Are Replying To:

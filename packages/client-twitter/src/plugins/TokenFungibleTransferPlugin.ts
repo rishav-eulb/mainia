@@ -152,7 +152,7 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
         });
     }
 
-    private async transferByAddress(
+    private async transferBySymbolAndTokenOwner(
         aptosClient: Aptos,
         movementAccount: Account,
         contractAddress: string,
@@ -161,11 +161,13 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
         const tx = await aptosClient.transaction.build.simple({
             sender: movementAccount.accountAddress.toStringLong(),
             data: {
-                function: `${contractAddress}::transfer_fa::transfer_token_by_token_address`,
+                function: `${contractAddress}::transfer_fa::transfer_token_by_tuser_id_and_symbol`,
                 typeArguments: [],
                 functionArguments: [
-                    params.username,                                    // tuser_id
-                    params.tokenAddress,                               // token_address
+                    params.username,                                   // tuser_id
+                    params.tokenAddress,                               // token_address,
+                    params.tokenCreator, // token creator twitter handle
+                    params.symbol, // token symbol
                     new AccountAddress(this.hexStringToUint8Array(params.recipient)),  // to (as AccountAddress)
                     BigInt(Math.floor(Number(params.amount) * Math.pow(10, 8)))   // amount (converted to base units)
                 ],
@@ -272,8 +274,8 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
                     result = await this.tokenTransferPlugin.stage_execute(movementTokenparam);
                 } else if (params.symbol && params.isVerified) {
                     result = await this.transferBySymbol(aptosClient, movementAccount, contractAddress, params);
-                } else if (params.tokenAddress && !params.isVerified) {
-                    result = await this.transferByAddress(aptosClient, movementAccount, contractAddress, params);
+                } else if (params.tokenCreator && params.symbol && !params.isVerified) {
+                    result = await this.transferBySymbolAndTokenOwner(aptosClient, movementAccount, contractAddress, params);
                 }
                  else {
                     return {
@@ -400,8 +402,8 @@ Only respond with the JSON, no other text.`,
                         
                         return {
                             isValidated: true,
-                            optionalParameterName: "symbol",
-                            optionalParameterPrompt: "This token is not verified. Kindly provide the twitter handle of the creator."
+                            optionalParameterName: "tokenOwner",
+                            optionalParameterPrompt: "This token is not verified. Please provide either the token owner's Twitter username (e.g., @user)"
                         }
                     },
                 },
@@ -438,7 +440,17 @@ Only respond with the JSON, no other text.`,
                     validator: (value: string) => /^@?[A-Za-z0-9_]{1,15}$/.test(value) || /^0x[0-9a-fA-F]{64}$/.test(value)
                 },
             ],
-            optionalParameters: [],
+            optionalParameters: [
+                {
+                    name: "tokenOwner",
+                    prompt: "Please provide either the token owner's Twitter username (e.g., @user)",
+                    extractorTemplate: `
+                    
+
+`,
+                    validator: (value: string) => /^@?[A-Za-z0-9_]{1,15}$/.test(value) || /^0x[0-9a-fA-F]{64}$/.test(value)
+                }
+            ],
             action: async (tweet: Tweet, runtime: IAgentRuntime, params: Map<string, string>) => {
                 const symbol = params.get("symbol").toUpperCase();
                 const contractAddress = "0xf17f471f57b12eb5a8bd1d722b385b5f1f0606d07b553828c344fb4949fd2a9d";
@@ -474,13 +486,39 @@ Only respond with the JSON, no other text.`,
                         userWalletAddress = await this.getUserWalletAddress(tweet.username, aptosClient, contractAddress);
                     }
                 }
+
+                let recipient = params.get('recipient');
+                // If not self soul-bound, resolve recipient address
+                if (recipient.startsWith("@")) {
+                    const username = recipient.substring(1);
+                    const network = MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
+                    const aptosClient = new Aptos(new AptosConfig({
+                        network: Network.CUSTOM,
+                        fullnode: network.fullnode,
+                    }));
+                    
+                    const resolvedAddress = await this.getUserWalletAddress(
+                        username,
+                        aptosClient,
+                        "0xf17f471f57b12eb5a8bd1d722b385b5f1f0606d07b553828c344fb4949fd2a9d"
+                    );
+                    
+                    if (!resolvedAddress) {
+                        return {
+                            response: "Cannot find any wallet linked to the twitter handle provided.",
+                            action: "ERROR"
+                        };
+                    }
+                    recipient = resolvedAddress;
+                }
+
                 try {
                     // Handle MOVE token separately
                     if (symbol === 'MOVE') {
                         const transferParams: TokenFungibleTransferParams = {
                             username: tweet.username,
                             symbol: symbol,
-                            recipient: params.get("recipient"),
+                            recipient,
                             amount: params.get("amount"),
                             tweetId: tweet.id,
                             isVerified: true
@@ -491,7 +529,7 @@ Only respond with the JSON, no other text.`,
                         if (result.success) {
                             const networkSetting = runtime.getSetting("MOVEMENT_NETWORK") || DEFAULT_NETWORK;
                             const network = MOVEMENT_NETWORK_CONFIG[networkSetting];
-                            const explorerUrl = `${MOVEMENT_EXPLORER_URL}/${result.transactionId}?network=${network.explorerNetwork}`;
+                            const explorerUrl = `${MOVEMENT_EXPLORER_URL}/txn/${result.transactionId}?network=${network.explorerNetwork}`;
                             
                             return {
                                 response: `✅ Transfer successful!\n\nAmount: ${params.get("amount")} ${symbol}\nTo: ${params.get("recipient")}\n\nView transaction: ${explorerUrl}`,
@@ -522,7 +560,7 @@ Only respond with the JSON, no other text.`,
                         const transferParams: TokenFungibleTransferParams = {
                             username: tweet.username,
                             symbol: symbol,
-                            recipient: params.get("recipient"),
+                            recipient,
                             amount: params.get("amount"),
                             tweetId: tweet.id,
                             isVerified: true
@@ -533,7 +571,7 @@ Only respond with the JSON, no other text.`,
                         if (result.success) {
                             const networkSetting = runtime.getSetting("MOVEMENT_NETWORK") || DEFAULT_NETWORK;
                             const network = MOVEMENT_NETWORK_CONFIG[networkSetting];
-                            const explorerUrl = `${MOVEMENT_EXPLORER_URL}/${result.transactionId}?network=${network.explorerNetwork}`;
+                            const explorerUrl = `${MOVEMENT_EXPLORER_URL}/txn/${result.transactionId}?network=${network.explorerNetwork}`;
                             
                             return {
                                 response: `✅ Transfer successful!\n\nAmount: ${params.get("amount")} ${symbol}\nTo: ${params.get("recipient")}\n\nView transaction: ${explorerUrl}`,
@@ -550,19 +588,12 @@ Only respond with the JSON, no other text.`,
                                 action: "TRANSFER_FAILED"
                             };
                         }
-                    } else if (!verifiedCheck.isVerified && !params.has("tokenAddress") && !params.has("tokenOwner")) {
-                        // Token is not verified, ask for token owner
-                        return {
-                            response: `${symbol} is a user-created token. Please provide the token owner's username.`,
-                            needsMoreInput: true,
-                            action: "transfer_token"
-                        };
-                    } else if ((params.has("tokenAddress")|| params.has("tokenOwner")) && !verifiedCheck.isVerified) {
+                    } else if (params.has("tokenOwner") && params.has("symbol") && !verifiedCheck.isVerified) {
                         // Handle transfer by token address
                         const transferParams: TokenFungibleTransferParams = {
                             username: tweet.username,
-                            tokenAddress: params.get("tokenAddress"),
-                            recipient: params.get("recipient"),
+                            tokenCreator: params.get("tokenOwner"),
+                            recipient,
                             amount: params.get("amount"),
                             tweetId: tweet.id,
                             isVerified: false
@@ -573,7 +604,7 @@ Only respond with the JSON, no other text.`,
                         if (result.success) {
                             const networkSetting = runtime.getSetting("MOVEMENT_NETWORK") || DEFAULT_NETWORK;
                             const network = MOVEMENT_NETWORK_CONFIG[networkSetting];
-                            const explorerUrl = `${MOVEMENT_EXPLORER_URL}/${result.transactionId}?network=${network.explorerNetwork}`;
+                            const explorerUrl = `${MOVEMENT_EXPLORER_URL}/txn/${result.transactionId}?network=${network.explorerNetwork}`;
                             
                             return {
                                 response: `✅ Transfer successful!\n\nAmount: ${params.get("amount")} ${symbol}\nTo: ${params.get("recipient")}\n\nView transaction: ${explorerUrl}`,
@@ -590,6 +621,11 @@ Only respond with the JSON, no other text.`,
                                 action: "TRANSFER_FAILED"
                             };
                         }
+                    } else {
+                        return {
+                            response: "Cannot determine the token details based on the details provided.",
+                            action: "INVALID_TOKEN_PARAMS"
+                        };
                     }
                 } catch (error) {
                     if (error.message?.includes("0x51001")) {

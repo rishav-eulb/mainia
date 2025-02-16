@@ -406,7 +406,7 @@ Only respond with the JSON, no other text.`,
                     if (result.success) {
                         const networkSetting = runtime.getSetting("MOVEMENT_NETWORK") || DEFAULT_NETWORK;
                         const network = MOVEMENT_NETWORK_CONFIG[networkSetting] || MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
-                        const explorerUrl = `${MOVEMENT_EXPLORER_URL}/${result.transactionId}?network=${network.explorerNetwork}`;
+                        const explorerUrl = `${MOVEMENT_EXPLORER_URL}/txn/${result.transactionId}?network=${network.explorerNetwork}`;
                         
                         const displayRecipient = recipient.startsWith("0x") ? recipient : `@${recipient}`;
                         return {

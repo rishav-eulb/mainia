@@ -23,4 +23,4 @@ export const MOVEMENT_NETWORK_CONFIG = {
 
 export const MOVEMENT_EXPLORER_URL = 'https://explorer.movementnetwork.xyz/';
 
-export const DEFAULT_NETWORK = 'porto';
+export const DEFAULT_NETWORK = 'bardock';
