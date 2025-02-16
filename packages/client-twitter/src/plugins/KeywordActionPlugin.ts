@@ -17,7 +17,7 @@ import { ClientBase } from "../base";
 export interface IParameterRequirement {
     name: string;
     prompt: string;
-    validator?: (value: string) => boolean;
+    validator?: (value: string, runtime?: IAgentRuntime) => Promise<boolean>;
     extractorTemplate?: string; // Template for parameter extraction
 }
 
@@ -84,41 +84,6 @@ Previous conversation context:
     "actionName": "string or null",
     "confidence": "HIGH/MEDIUM/LOW",
     "reasoning": "Brief explanation of the decision",
-    "extractedParams": {
-        "paramName": "extractedValue"
-    }
-}
-
-Only respond with the JSON, no other text.`;
-
-const parameterExtractionTemplate = `
-# Task: Extract parameter value from user's message in a conversational context
-
-About {{agentName}} (@{{twitterUserName}}):
-{{bio}}
-
-Parameter to extract: {{parameterName}}
-Parameter description: {{parameterDescription}}
-
-User's message:
-{{userMessage}}
-
-Previous conversation context:
-{{conversationContext}}
-
-# Instructions:
-1. Extract the value for the specified parameter
-2. Consider both explicit and implicit mentions in the context
-3. Consider common variations and synonyms
-4. Return your response in this JSON format:
-{
-    "extracted": true/false,
-    "value": "extracted_value or null if not found",
-    "confidence": "HIGH/MEDIUM/LOW",
-    "alternativeValues": ["other", "possible", "interpretations"],
-    "clarificationNeeded": true/false,
-    "suggestedPrompt": "A natural way to ask for clarification if needed",
-    "reasoning": "Brief explanation of the extraction logic"
 }
 
 Only respond with the JSON, no other text.`;
@@ -130,8 +95,8 @@ export class KeywordActionPlugin {
     private runtime: IAgentRuntime;
     private pendingActions: Map<string, PendingAction> = new Map();
     private TIMEOUT_MS = 5 * 60 * 1000;
-    private MAX_ATTEMPTS = 3;
-    private MAX_CLARIFICATIONS = 2;
+    private MAX_ATTEMPTS = 7;
+    private MAX_CLARIFICATIONS = 4;
 
     constructor(client: ClientBase, runtime: IAgentRuntime) {
         this.client = client;
@@ -194,38 +159,25 @@ export class KeywordActionPlugin {
         return this.actions;
     }
 
-    private async findExistingActionKey(tweet: Tweet, thread: Tweet[]): Promise<string | null> {
-        // Check current tweet
-        const currentKey = `${tweet.userId}-${tweet.id}`;
-        if (this.pendingActions.has(currentKey)) {
-            return currentKey;
-        }
-
-        // Check thread
-        for (const threadTweet of thread) {
-            const threadKey = `${tweet.userId}-${threadTweet.id}`;
-            if (this.pendingActions.has(threadKey)) {
-                return threadKey;
-            }
-        }
-        return null;
-    }
     
     //TODO: To add conversation context to the Memory 
 
     private async recognizeIntent(tweet: Tweet, conversationContext: string[] = []): Promise<any> {
         const availableActions = this.actions.map(a => 
-            `${a.name}: ${a.description}\nExample phrases: ${a.examples.join(", ")}`
+            `${a.name}: ${a.description}\nExample phrases: ${a.examples.join(", ")}\nRequired parameters: ${(a.requiredParameters || []).map(p => p.name).join(", ")}`
         ).join("\n\n");
 
-        
+        elizaLogger.info("KeywordActionPlugin: Starting intent recognition", {
+            tweetText: tweet.text,
+            contextLength: conversationContext.length
+        });
 
         const memory: Memory = {
             id: stringToUuid(tweet.id + "-intent"),
             userId: stringToUuid(tweet.userId),
             agentId: this.runtime.agentId,
             roomId: stringToUuid(tweet.id),
-            content: { text: tweet.text || "",  },
+            content: { text: tweet.text || "" },
             embedding: getEmbeddingZeroVector(),
             createdAt: Date.now()
         };
@@ -241,16 +193,36 @@ export class KeywordActionPlugin {
             template: intentRecognitionTemplate
         });
 
+        elizaLogger.info("KeywordActionPlugin: Sending intent recognition prompt", {
+            template: intentRecognitionTemplate,
+            userMessage: tweet.text
+        });
+
         const response = await generateText({
             runtime: this.runtime,
             context,
-            modelClass: ModelClass.SMALL
+            modelClass: ModelClass.MEDIUM,
+            verifiableInference: true
+        });
+
+        elizaLogger.info("KeywordActionPlugin: Received model response for intent recognition", {
+            rawResponse: response
         });
 
         try {
-            return JSON.parse(response);
+            const result = JSON.parse(response);
+            elizaLogger.info("KeywordActionPlugin: Parsed intent recognition result", {
+                parsedResult: result
+            });
+            
+
+            
+         return result;
         } catch (error) {
-            console.error('Error parsing intent recognition response:', error);
+            elizaLogger.error('KeywordActionPlugin: Error parsing intent recognition response:', {
+                error: error instanceof Error ? error.message : String(error),
+                response
+            });
             return null;
         }
     }
@@ -261,7 +233,12 @@ export class KeywordActionPlugin {
         conversationContext: string[]
     ): Promise<any> {
         try {
-            const template = paramReq.extractorTemplate || parameterExtractionTemplate;
+            elizaLogger.info("KeywordActionPlugin: Starting parameter extraction", {
+                paramName: paramReq.name,
+                tweetText: tweet.text
+            });
+
+            const template = paramReq.extractorTemplate ;
             
             const memory: Memory = {
                 id: stringToUuid(tweet.id + "-param"),
@@ -288,15 +265,30 @@ export class KeywordActionPlugin {
                 template
             });
 
+            elizaLogger.info("KeywordActionPlugin: Sending parameter extraction prompt", {
+                template,
+                paramName: paramReq.name,
+                userMessage: tweet.text
+            });
+
             const response = await generateText({
                 runtime: this.runtime,
                 context,
                 modelClass: ModelClass.SMALL,
-                verifiableInference: true // Use verifiable inference to ensure valid JSON
+                verifiableInference: true
+            });
+
+            elizaLogger.info("KeywordActionPlugin: Received model response for parameter extraction", {
+                paramName: paramReq.name,
+                rawResponse: response
             });
 
             try {
                 const result = JSON.parse(response);
+                elizaLogger.info("KeywordActionPlugin: Parsed parameter extraction result", {
+                    paramName: paramReq.name,
+                    parsedResult: result
+                });
                 
                 // If we need clarification but have asked too many times, try best effort
                 if (result.clarificationNeeded && result.alternativeValues?.length > 0) {
@@ -305,16 +297,20 @@ export class KeywordActionPlugin {
                         result.extracted = true;
                         result.value = result.alternativeValues[0];
                         result.clarificationNeeded = false;
+                        elizaLogger.info("KeywordActionPlugin: Using best effort value after max clarifications", {
+                            paramName: paramReq.name,
+                            value: result.value
+                        });
                     }
                 }
                 
                 return result;
             } catch (error) {
-                elizaLogger.error("Error parsing parameter extraction response:", {
-                    error: error.message,
+                elizaLogger.error("KeywordActionPlugin: Error parsing parameter extraction response:", {
+                    error: error instanceof Error ? error.message : String(error),
+                    paramName: paramReq.name,
                     response
                 });
-                // Return a structured error response
                 return {
                     extracted: false,
                     value: null,
@@ -325,7 +321,10 @@ export class KeywordActionPlugin {
                 };
             }
         } catch (error) {
-            elizaLogger.error("Error during parameter extraction:", error);
+            elizaLogger.error("KeywordActionPlugin: Error during parameter extraction:", {
+                error: error instanceof Error ? error.message : String(error),
+                paramName: paramReq.name
+            });
             return {
                 extracted: false,
                 value: null,
@@ -345,28 +344,59 @@ export class KeywordActionPlugin {
         data?: any;
         needsMoreInput?: boolean;
     }> {
-        // First try plugin-specific handlers
-        for (const plugin of this.plugins.values()) {
-            if (plugin.handleTweet) {
-                try {
-                    const result = await plugin.handleTweet(tweet, this.runtime);
-                    if (result.response || result.action) {
-                        return {
-                            hasAction: true,
-                            action: result.action,
-                            response: result.response,
-                            data: result.data
-                        };
+        // Fall back to standard keyword action processing
+        const userId = tweet.userId;
+
+        // If no ongoing session then try the plugins
+        if(!this.pendingActions.has(userId)) {
+            for (const plugin of this.plugins.values()) {
+                if (plugin.handleTweet) {
+                    try {
+                        const result = await plugin.handleTweet(tweet, this.runtime);
+                        if (result.response || result.action) {
+                            return {
+                                hasAction: true,
+                                action: result.action,
+                                response: result.response,
+                                data: result.data
+                            };
+                        }
+                    } catch (error) {
+                        elizaLogger.error(`Error in plugin ${plugin.name} handleTweet:`, error);
                     }
-                } catch (error) {
-                    elizaLogger.error(`Error in plugin ${plugin.name} handleTweet:`, error);
+                }
+            }
+        }
+       
+        if (!this.pendingActions.has(userId)) {
+            const intent = await this.recognizeIntent(tweet);
+            elizaLogger.debug("KeywordActionPlugin: Intent recognition result:", intent);
+            
+            if (intent?.hasIntent && intent?.actionName && intent.confidence !== 'LOW') {
+               const actionHandler = this.actions.find(a => a.name === intent.actionName);
+               elizaLogger.debug("KeywordActionPlugin: Found action handler:", actionHandler?.name);
+                if (actionHandler) {
+                // Initialize new action with extracted parameters
+                    const collectedParams = new Map<string, string>();
+
+
+                // Start parameter collection with a natural response
+                    this.pendingActions.set(userId, {
+                        actionHandler,
+                        collectedParams,
+                        lastPromptTime: Date.now(),
+                        userId,
+                        roomId: stringToUuid(tweet.id),
+                        conversationContext: [`User: ${tweet.text}`],
+                        attempts: 0,
+                        clarificationCount: 0
+                    });
+
                 }
             }
         }
 
-        // Fall back to standard keyword action processing
-        const userId = tweet.userId;
-        const pendingAction = this.pendingActions.get(userId);
+        let pendingAction = this.pendingActions.get(userId);       
 
         if (pendingAction) {
             pendingAction.conversationContext.push(`User: ${tweet.text}`);
@@ -391,13 +421,36 @@ export class KeywordActionPlugin {
                         pendingAction.conversationContext
                     );
 
-                    if (extraction?.extracted && extraction?.confidence !== 'LOW') {
-                        if (!paramReq.validator || paramReq.validator(extraction.value)) {
+                    elizaLogger.info("KeywordActionPlugin: Extraction result:", {
+                        extraction,
+                        key: paramReq.name
+                    });
+
+                    if ((extraction?.extracted || extraction?.optional) && extraction?.confidence !== 'LOW') {
+                        if (!paramReq.validator || (await paramReq.validator(extraction.value, this.runtime))) {
+
+                            elizaLogger.info("KeywordActionPlugin: Extraction validation:", {
+                                extraction,
+                                key: paramReq.name
+                            });
                             pendingAction.collectedParams.set(paramReq.name, extraction.value);
                             pendingAction.conversationContext.push(
                                 `Bot: ${extraction.suggestedPrompt || `Great! I got the ${paramReq.name}.`}`
                             );
                             continue;
+                        } else {
+                            pendingAction.clarificationCount++;
+                            if (pendingAction.clarificationCount <= this.MAX_CLARIFICATIONS) {
+                                const prompt = extraction.suggestedPrompt || paramReq.prompt;
+                                if (prompt !== pendingAction.lastParameterPrompt) {
+                                    pendingAction.lastParameterPrompt = prompt;
+                                    return {
+                                        hasAction: true,
+                                        response: prompt,
+                                        needsMoreInput: true
+                                    };
+                                }
+                            }
                         }
                     }
 
@@ -450,232 +503,10 @@ export class KeywordActionPlugin {
             }
         }
 
-        // No pending action, try to recognize intent
-        const intent = await this.recognizeIntent(tweet);
-        elizaLogger.debug("KeywordActionPlugin: Intent recognition result:", intent);
-        
-        if (intent?.hasIntent && intent?.actionName && intent.confidence !== 'LOW') {
-            const actionHandler = this.actions.find(a => a.name === intent.actionName);
-            elizaLogger.debug("KeywordActionPlugin: Found action handler:", actionHandler?.name);
-            if (actionHandler) {
-                // Initialize new action with extracted parameters
-                const collectedParams = new Map<string, string>();
-                if (intent.extractedParams) {
-                    Object.entries(intent.extractedParams).forEach(([key, value]) => {
-                        if (value && (!actionHandler.requiredParameters?.find(p => p.name === key)?.validator || 
-                            actionHandler.requiredParameters?.find(p => p.name === key)?.validator?.(value as string))) {
-                            collectedParams.set(key, value as string);
-                        }
-                    });
-                }
-
-                // If we have all parameters, execute immediately
-                if (actionHandler.requiredParameters?.every(p => collectedParams.has(p.name))) {
-                    try {
-                        const result = await actionHandler.action(tweet, this.runtime, collectedParams);
-                        return {
-                            hasAction: true,
-                            response: result.response,
-                            data: result.data,
-                            action: result.action
-                        };
-                    } catch (error) {
-                        console.error('Error executing action:', error);
-                        return {
-                            hasAction: true,
-                            response: "I encountered an error while processing your request. Could you try again?"
-                        };
-                    }
-                }
-
-                // Start parameter collection with a natural response
-                this.pendingActions.set(userId, {
-                    actionHandler,
-                    collectedParams,
-                    lastPromptTime: Date.now(),
-                    userId,
-                    roomId: stringToUuid(tweet.id),
-                    conversationContext: [`User: ${tweet.text}`],
-                    attempts: 1,
-                    clarificationCount: 0
-                });
-
-                // Use the suggested response from intent recognition if available
-                const response = intent.suggestedResponse || 
-                    actionHandler.requiredParameters?.find(p => !collectedParams.has(p.name))?.prompt ||
-                    "I need some more information to help you with that.";
-
-                return {
-                    hasAction: true,
-                    response,
-                    needsMoreInput: true
-                };
-            }
-        }
-
         return {
             hasAction: false
-        };
+        }
     }
 
-//     private async validateTweetIntent(tweet: Tweet, thread: Tweet[]): Promise<{
-//         hasIntent: boolean;
-//         intentType: "NEW_INTENT" | "CONTINUE_CONVERSATION" | "CANCEL_INTENT" | "NORMAL_CONVERSATION";
-//         actionName: string | null;
-//         confidence: "HIGH" | "MEDIUM" | "LOW";
-//         reasoning: string;
-//     }> {
-//         // First, try to find if this is part of an existing conversation
-//         const existingActionKey = await this.findExistingActionKey(tweet, thread);
-//         let existingAction: PendingAction | undefined;
-//         if (existingActionKey) {
-//             existingAction = this.pendingActions.get(existingActionKey);
-//         }
 
-//         const availableActions = this.actions.map(a => 
-//             `${a.name}: ${a.description}\nExample phrases: ${a.examples.join(", ")}`
-//         ).join("\n\n");
-
-//         // Include the full conversation context from the pending action if it exists
-//         const conversationContext = existingAction 
-//             ? existingAction.conversationContext.join("\n")
-//             : thread.map(t => `${t.username}: ${t.text}`).join("\n");
-
-//         // Get all messages from the same room for better context
-//         const roomMessages = await this.runtime.messageManager.getMemoriesByRoomIds({
-//             roomIds: [stringToUuid(existingAction?.roomId || tweet.id)],
-//             limit: 10  // Get last 10 messages for context
-//         });
-
-//         const roomContext = roomMessages
-//             .sort((a, b) => a.createdAt - b.createdAt)
-//             .map(msg => `${msg.userId}: ${msg.content.text}`)
-//             .join("\n");
-
-//         const memory: Memory = {
-//             id: stringToUuid(tweet.id + "-intent"),
-//             userId: stringToUuid(tweet.userId || ""),
-//             agentId: this.runtime.agentId,
-//             roomId: stringToUuid(existingAction?.roomId || tweet.id),
-//             content: { text: tweet.text || "" },
-//             embedding: getEmbeddingZeroVector(),
-//             createdAt: Date.now()
-//         };
-
-//         const state = await this.runtime.composeState(memory, {
-//             availableActions,
-//             userMessage: tweet.text,
-//             conversationContext,
-//             roomContext,
-//             currentAction: existingAction ? {
-//                 name: existingAction.actionHandler.name,
-//                 collectedParams: Object.fromEntries(existingAction.collectedParams),
-//                 missingParams: existingAction.actionHandler.requiredParameters
-//                     ?.filter(param => !existingAction.collectedParams.has(param.name))
-//                     .map(param => param.name) || []
-//             } : null
-//         });
-
-//         const enhancedIntentTemplate = `
-// # Task: Determine if the user's message indicates intent to perform a specific action or is a normal conversation.
-
-// Available Actions:
-// {{availableActions}}
-
-// User's message:
-// {{userMessage}}
-
-// Previous conversation context:
-// {{conversationContext}}
-
-// Room conversation history:
-// {{roomContext}}
-
-// ${existingAction ? `
-// Current ongoing action:
-// - Action: ${existingAction.actionHandler.name}
-// - Collected parameters: ${Array.from(existingAction.collectedParams.entries()).map(([key, value]) => `${key}=${value}`).join(', ')}
-// - Missing parameters: ${existingAction.actionHandler.requiredParameters
-//     ?.filter(param => !existingAction.collectedParams.has(param.name))
-//     .map(param => param.name)
-//     .join(', ')}
-// ` : ''}
-
-// # Instructions:
-// 1. Analyze if the user's message indicates they want to perform one of the available actions
-// 2. Consider both explicit mentions and implicit intentions
-// 3. Look for contextual clues and previous conversation history
-// 4. If there's an ongoing action, determine if:
-//    - User is providing missing parameters
-//    - User wants to cancel the action
-//    - User wants to start a new action instead
-// 5. Return your response in this JSON format:
-// {
-//     "hasIntent": boolean,
-//     "intentType": "NEW_INTENT" | "CONTINUE_CONVERSATION" | "CANCEL_INTENT" | "NORMAL_CONVERSATION",
-//     "actionName": "string or null",
-//     "confidence": "HIGH/MEDIUM/LOW",
-//     "reasoning": "Brief explanation of the decision",
-//     "extractedParams": {
-//         "paramName": "extractedValue"
-//     }
-// }
-
-// Only respond with the JSON, no other text.`;
-
-//         const context = composeContext({
-//             state,
-//             template: enhancedIntentTemplate
-//         });
-
-//         const response = await generateText({
-//             runtime: this.runtime,
-//             context,
-//             modelClass: ModelClass.SMALL
-//         });
-
-//         try {
-//             return JSON.parse(response);
-//         } catch (error) {
-//             elizaLogger.error("Error parsing intent validation response:", error);
-//             return {
-//                 hasIntent: false,
-//                 intentType: "NORMAL_CONVERSATION",
-//                 actionName: null,
-//                 confidence: "LOW",
-//                 reasoning: "Error parsing intent validation"
-//             };
-//         }
-//     }
 }
-
-// Example usage:
-/*
-const plugin = new KeywordActionPlugin(client, runtime);
-
-// Register an action
-plugin.registerAction({
-    name: "weather",
-    description: "Get weather information",
-    examples: ["What's the weather today?", "How's the weather in New York?"],
-    action: async (tweet, runtime) => {
-        // Extract location from tweet
-        // Call weather API
-        // Format response
-        return {
-            response: "Weather information...",
-            data: { temperature: 20, condition: "sunny" }
-        };
-    }
-});
-
-// In your tweet handler:
-const result = await plugin.processTweet(tweet);
-if (result.hasAction) {
-    // Send the response
-    await sendTweet(result.response);
-} else {
-    // Handle normally
-    // ...
-}
-*/ 

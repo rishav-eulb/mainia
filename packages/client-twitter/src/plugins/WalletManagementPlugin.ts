@@ -213,12 +213,12 @@ export class WalletManagementPlugin implements IKeywordPlugin {
             name: "wallet_management",
             description: "Manage user's wallet (get address or balance)",
             examples: [
-                "@movebot what is my wallet address",
-                "@movebot show my wallet address",
-                "@movebot get my wallet balance",
-                "@movebot how much MOVE do I have",
-                "@movebot check my balance",
-                "@movebot create wallet"
+                "@radhemfeulb69 what is my wallet address",
+                "@radhemfeulb69 show my wallet address",
+                "@radhemfeulb69 get my wallet balance",
+                "@radhemfeulb69 how much MOVE do I have",
+                "@radhemfeulb69 check my balance",
+                "@radhemfeulb69 create wallet"
             ],
             requiredParameters: [],
             action: async (tweet: Tweet, runtime: IAgentRuntime) => {
@@ -270,10 +270,10 @@ export class WalletManagementPlugin implements IKeywordPlugin {
             name: "wallet_registration",
             description: "Handle wallet registration confirmation",
             examples: [
-                "@movebot yes",
-                "@movebot yes create wallet",
-                "@movebot yes please",
-                "@movebot create wallet"
+                "@radhemfeulb69 yes",
+                "@radhemfeulb69 yes create wallet",
+                "@radhemfeulb69 yes please",
+                "@radhemfeulb69 create wallet"
             ],
             requiredParameters: [],
             action: async (tweet: Tweet, runtime: IAgentRuntime) => {

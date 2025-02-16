@@ -18,6 +18,8 @@ import { TokenFungibleTransferPlugin } from "./TokenFungibleTransferPlugin";
 import { TokenOwnershipTransferPlugin } from "./TokenOwnershipTransferPlugin";
 import { TokenCreationPlugin } from "./TokenCreationPlugin";
 import { ImageGenerationPlugin } from "./ImageGenerationPlugin";
+import { env } from "process";
+import { TweetImageUploader } from "./utils/PostCreator";
 
 export class MovebotService extends TwitterInteractionClient {
     private keywordPlugin: KeywordActionPlugin;
@@ -28,6 +30,7 @@ export class MovebotService extends TwitterInteractionClient {
     private tokenCreationPlugin: TokenCreationPlugin;
     private imageGenerationPlugin: ImageGenerationPlugin;
     private processingLock: boolean = false;
+    private tweetImageCreator: TweetImageUploader;
     private static readonly BATCH_SIZE = 20;
     private isRunning: boolean = false;
     private retryCount: number = 0;
@@ -44,6 +47,7 @@ export class MovebotService extends TwitterInteractionClient {
         this.tokenOwnershipTransferPlugin = new TokenOwnershipTransferPlugin();
         this.tokenCreationPlugin = new TokenCreationPlugin();
         this.imageGenerationPlugin = new ImageGenerationPlugin();
+        this.tweetImageCreator = new TweetImageUploader();
         
         // Initialize and register all plugins
         Promise.all([
@@ -102,7 +106,7 @@ export class MovebotService extends TwitterInteractionClient {
     public async start() {
         if (!await this.ensureLogin()) {
             elizaLogger.error("Failed to initialize MovebotService, retrying in 30 seconds");
-            setTimeout(() => this.start(), 30000);
+            setTimeout(() => this.start(), 3000000);
             return;
         }
 
@@ -114,7 +118,7 @@ export class MovebotService extends TwitterInteractionClient {
                 elizaLogger.info("MovebotService: Fetched profile successfully");
             } catch (error) {
                 elizaLogger.error("Failed to fetch Twitter profile, retrying in 30 seconds:", error);
-                setTimeout(() => this.start(), 30000);
+                setTimeout(() => this.start(), 3000);
                 return;
             }
         }
@@ -277,6 +281,8 @@ export class MovebotService extends TwitterInteractionClient {
                 elizaLogger.warn("Invalid tweet received:", tweet);
                 return { text: "", action: "IGNORE" };
             }
+
+            tweet.text = tweet.text.replace(`@${env.TWITTER_USERNAME}`,'')
 
             // Process with KeywordActionPlugin directly
             const result = await this.safeApiCall(async () => 

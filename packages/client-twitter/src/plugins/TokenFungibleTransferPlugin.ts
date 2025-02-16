@@ -13,16 +13,20 @@ import {
     Network,
     PrivateKey,
     PrivateKeyVariants,
+    AccountAddress
 } from "@aptos-labs/ts-sdk";
-import { MOVEMENT_NETWORK_CONFIG, DEFAULT_NETWORK } from "../constants";
+import { MOVEMENT_NETWORK_CONFIG, DEFAULT_NETWORK, MOVEMENT_EXPLORER_URL } from "../constants";
 import { TokenTransferPlugin } from "./TokenTransferPlugin";
+import { sendTweet } from "../utils";
+import { Address } from "@coinbase/coinbase-sdk";
 export interface TokenFungibleTransferParams {
     username: string;
     tokenCreator?: string;  // Optional token creator's twitter handle
     symbol?: string;        // Token symbol/ticker (required for symbol-based transfer)
     tokenAddress?: string;  // Token address (required for address-based transfer)
     recipient: string;      // Recipient address
-    amount: string;         // Amount to transfer
+    amount: string;
+    tweetId: string;
 }
 
 
@@ -37,9 +41,10 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
     async initialize(client: ClientBase, runtime: IAgentRuntime): Promise<void> {
         this.client = client;
         this.runtime = runtime;
+        this.tokenTransferPlugin = new TokenTransferPlugin();
+        await this.tokenTransferPlugin.initialize(client, runtime);
         this.registerActions();
         elizaLogger.info("TokenFungibleTransferPlugin: Initialized");
-        this.tokenTransferPlugin = new TokenTransferPlugin();
     }
 
     public getActions(): IKeywordAction[] {
@@ -73,6 +78,16 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
         }
     }
 
+    private hexStringToUint8Array(hexString: string): Uint8Array {
+        // Remove '0x' prefix if present
+        const cleanHex = hexString.startsWith('0x') ? hexString.slice(2) : hexString;
+        const pairs = cleanHex.match(/[\dA-F]{2}/gi);
+        if (!pairs) {
+            throw new Error('Invalid hex string');
+        }
+        return new Uint8Array(pairs.map(s => parseInt(s, 16)));
+    }
+
     private async transferBySymbol(
         aptosClient: Aptos,
         movementAccount: Account,
@@ -87,9 +102,9 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
                 functionArguments: [
                     params.username,                                    // tuser_id
                     params.tokenCreator || params.username,            // token_tuser_id (defaults to sender if not specified)
-                    params.symbol,                                     // symbol
-                    params.recipient,                                  // to
-                    BigInt(Number(params.amount) * Math.pow(10, 8))   // amount (converted to base units)
+                    params.symbol || "",                               // symbol
+                    new AccountAddress(this.hexStringToUint8Array(params.recipient)),  // to (as AccountAddress)
+                    BigInt(Math.floor(Number(params.amount) * Math.pow(10, 8)))   // amount (converted to base units)
                 ],
             },
         });
@@ -119,8 +134,8 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
                 functionArguments: [
                     params.username,                                    // tuser_id
                     params.tokenAddress,                               // token_address
-                    params.recipient,                                  // to
-                    BigInt(Number(params.amount) * Math.pow(10, 8))   // amount (converted to base units)
+                    new AccountAddress(this.hexStringToUint8Array(params.recipient)),  // to (as AccountAddress)
+                    BigInt(Math.floor(Number(params.amount) * Math.pow(10, 8)))   // amount (converted to base units)
                 ],
             },
         });
@@ -134,6 +149,44 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
             transactionHash: committedTx.hash,
             options: { timeoutSecs: 30, checkSuccess: true }
         });
+    }
+
+    private async checkVerifiedTokenBalance(
+        aptosClient: Aptos, 
+        contractAddress: string,
+        tuser_id: string, 
+        symbol: string
+    ): Promise<{ isVerified: boolean; balance?: string }> {
+        try {
+            const result = await aptosClient.view({
+                payload: {
+                    function: `${contractAddress}::fa_wallet::wallet_fa_balance_for_verified_token`,
+                    typeArguments: [],
+                    functionArguments: [tuser_id, symbol]
+                }
+            });
+            return { isVerified: true, balance: result[0] as string };
+        } catch (error) {
+            // If error occurs, token is not verified
+            return { isVerified: false };
+        }
+    }
+
+    private async checkUserCreatedTokenBalance(
+        aptosClient: Aptos,
+        contractAddress: string,
+        tuser_id: string,
+        token_owner_tuser_id: string,
+        symbol: string
+    ): Promise<string> {
+        const result = await aptosClient.view({
+            payload: {
+                function: `${contractAddress}::fa_wallet::wallet_fa_balance_for_user_created_token`,
+                typeArguments: [],
+                functionArguments: [tuser_id, token_owner_tuser_id, symbol]
+            }
+        });
+        return result[0] as string;
     }
 
     private async stage_execute(params: TokenFungibleTransferParams): Promise<{
@@ -196,7 +249,7 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
                 if (params.symbol && (params.symbol == "MOVE" || params.symbol == "move")) {
                     result = await this.tokenTransferPlugin.stage_execute(movementTokenparam);
                 } else if (params.symbol) {
-                    result = await this.transferByAddress(aptosClient, movementAccount, contractAddress, params);
+                    result = await this.transferBySymbol(aptosClient, movementAccount, contractAddress, params);
                 } else if (params.tokenAddress) {
                     result = await this.transferByAddress(aptosClient, movementAccount, contractAddress, params);
                 }
@@ -248,72 +301,210 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
     }
 
     private registerActions() {
-        const transferAction: IKeywordAction = {
-            name: "transfer_fungible_token",
-            description: "Transfer fungible tokens to an address",
+        const transferTokenAction: IKeywordAction = {
+            name: "transfer_token",
+            description: "Transfer tokens to another user or address",
             examples: [
-                "@radhemfeulb69 I want to transfer some tokens",
-                "I want to send some tokens",
-                "How do I send tokens?",
-                "Can you help me send tokens ?",
-                "I need help transferring tokens",
-                "Show me how to transfer",
-                "@radhemfeulb69 transfer 100 TEST to 0x123...",
-                "@radhemfeulb69 send 50 TEST from @creator to 0x456...",
-                "@radhemfeulb69 transfer token 0x789... 75 to 0x123...",
-                "@radhemfeulb69 send 200 tokens at 0x789... to 0x123..."
+                "@radhemfeulb69 transfer 100 tokens to @user",
+                "@radhemfeulb69 send 50 TEST to 0x123...",
+                "@radhemfeulb69 can you some USDC to @user",
+                "@radhemfeulb69 send 100 USDC to 0x53..."
             ],
             requiredParameters: [
                 {
-                    name: "tokenIdentifier",
-                    prompt: "Please provide either the token symbol (e.g., TEST) or the token address (starting with 0x)",
-                    validator: (value: string) => {
-                        // Accept either a symbol (2-10 chars) or an address (0x...)
-                        return /^[A-Z0-9]{2,10}$/.test(value) || /^0x[0-9a-fA-F]{64}$/.test(value);
-                    }
-                },
-                {
-                    name: "amount",
-                    prompt: "How many tokens would you like to transfer?",
-                    validator: (value: string) => {
-                        const num = Number(value);
-                        return !isNaN(num) && num > 0;
-                    }
+                    name: "symbol",
+                    prompt: "What token would you like to transfer?",
+                    extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
+
+Parameter to extract: symbol
+Parameter description: Token symbol must be 2-10 characters long, uppercase letters and numbers only.
+
+User's message:
+{{userMessage}}
+
+Previous conversation context:
+{{conversationContext}}
+
+# Instructions:
+1. Extract the value for the specified parameter
+2. Consider both explicit and implicit mentions in the context
+3. Consider common variations and synonyms
+4. Return your response in this JSON format:
+{
+    "extracted": true/false,
+    "value": "extracted_value or null if not found",
+    "confidence": "HIGH/MEDIUM/LOW",
+    "alternativeValues": ["other", "possible", "interpretations"],
+    "clarificationNeeded": true/false,
+    "suggestedPrompt": "A natural way to ask for clarification if needed",
+    "reasoning": "Brief explanation of the extraction logic"
+}
+
+Only respond with the JSON, no other text.`,
+                    validator: (value: string) => /^[A-Z0-9]{2,10}$/.test(value.toUpperCase())
                 },
                 {
                     name: "recipient",
-                    prompt: "Please provide the recipient's wallet address (must start with 0x)",
-                    validator: (value: string) => /^0x[0-9a-fA-F]{64}$/.test(value)
+                    prompt: "Please provide either the recipient's Twitter username (e.g., @user) or wallet address (starting with 0x)",
+                    extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
+
+Parameter to extract: recipient
+Parameter description: Either a Twitter username (starting with @) or a wallet address (starting with 0x).
+
+User's message:
+{{userMessage}}
+
+Previous conversation context:
+{{conversationContext}}
+
+# Instructions:
+1. Extract the value for the specified parameter
+2. Consider both explicit and implicit mentions in the context
+3. Consider common variations and synonyms
+4. Return your response in this JSON format:
+{
+    "extracted": true/false,
+    "value": "extracted_value or null if not found",
+    "confidence": "HIGH/MEDIUM/LOW",
+    "alternativeValues": ["other", "possible", "interpretations"],
+    "clarificationNeeded": true/false,
+    "suggestedPrompt": "A natural way to ask for clarification if needed",
+    "reasoning": "Brief explanation of the extraction logic"
+}
+
+Only respond with the JSON, no other text.`,
+                    validator: (value: string) => /^@?[A-Za-z0-9_]{1,15}$/.test(value) || /^0x[0-9a-fA-F]{64}$/.test(value)
                 }
-                
             ],
             action: async (tweet: Tweet, runtime: IAgentRuntime, params: Map<string, string>) => {
-                elizaLogger.info("TokenFungibleTransferPlugin: Processing transfer with params:", Object.fromEntries(params));
+                const symbol = params.get("symbol").toUpperCase();
+                const contractAddress = "0xf17f471f57b12eb5a8bd1d722b385b5f1f0606d07b553828c344fb4949fd2a9d";
                 
+                const network = MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
+                const aptosClient = new Aptos(
+                    new AptosConfig({
+                        network: Network.CUSTOM,
+                        fullnode: network.fullnode,
+                    })
+                );
+
+                // First check if it's a verified token
+                const verifiedCheck = await this.checkVerifiedTokenBalance(
+                    aptosClient,
+                    contractAddress,
+                    tweet.username,
+                    symbol
+                );
+
+                if (verifiedCheck.isVerified) {
+                    // For verified token, ask for amount
+                    return {
+                        response: `How many ${symbol} tokens would you like to transfer? Your current balance is ${verifiedCheck.balance} ${symbol}`,
+                        action: "COLLECT_AMOUNT"
+                    };
+                } else {
+                    // For user-created token, ask for token owner
+                    return {
+                        response: `This appears to be a user-created token. Please provide the Twitter username of the token owner.`,
+                        action: "COLLECT_TOKEN_OWNER"
+                    };
+                }
+            }
+        };
+
+        const collectAmountAction: IKeywordAction = {
+            name: "collect_amount",
+            description: "Collect transfer amount",
+            examples: ["100", "50.5"],
+            requiredParameters: [
+                {
+                    name: "amount",
+                    prompt: "How many tokens would you like to transfer?",
+                    extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
+
+Parameter to extract: amount
+Parameter description: A positive number must be the amount of tokens to transfer. Can include decimals.
+
+User's message:
+{{userMessage}}
+
+Previous conversation context:
+{{conversationContext}}
+
+# Instructions:
+1. Extract the value for the specified parameter
+2. Consider both explicit and implicit mentions in the context
+3. Consider common variations and synonyms
+4. Return your response in this JSON format:
+{
+    "extracted": true/false,
+    "value": "extracted_value or null if not found",
+    "confidence": "HIGH/MEDIUM/LOW",
+    "alternativeValues": ["other", "possible", "interpretations"],
+    "clarificationNeeded": true/false,
+    "suggestedPrompt": "A natural way to ask for clarification if needed",
+    "reasoning": "Brief explanation of the extraction logic"
+}
+
+Only respond with the JSON, no other text.`,
+                    validator: (value: string) => !isNaN(Number(value)) && Number(value) > 0
+                },
+                {
+                    name: "recipient",
+                    prompt: "Who would you like to transfer to? (Twitter handle or wallet address)",
+                    extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
+
+Parameter to extract: recipient
+Parameter description: Either a Twitter username (starting with @) or a wallet address (starting with 0x).
+
+User's message:
+{{userMessage}}
+
+Previous conversation context:
+{{conversationContext}}
+
+# Instructions:
+1. Extract the value for the specified parameter
+2. Consider both explicit and implicit mentions in the context
+3. Consider common variations and synonyms
+4. Return your response in this JSON format:
+{
+    "extracted": true/false,
+    "value": "extracted_value or null if not found",
+    "confidence": "HIGH/MEDIUM/LOW",
+    "alternativeValues": ["other", "possible", "interpretations"],
+    "clarificationNeeded": true/false,
+    "suggestedPrompt": "A natural way to ask for clarification if needed",
+    "reasoning": "Brief explanation of the extraction logic"
+}
+
+Only respond with the JSON, no other text.`,
+                    validator: (value: string) => /^@?[A-Za-z0-9_]{1,15}$/.test(value) || /^0x[0-9a-fA-F]{64}$/.test(value)
+                }
+            ],
+            action: async (tweet: Tweet, runtime: IAgentRuntime, params: Map<string, string>) => {
                 const amount = params.get("amount");
                 const recipient = params.get("recipient");
-                const tokenIdentifier = params.get("tokenIdentifier");
-
-                
-                // Determine if tokenIdentifier is a symbol or address
-                const isAddress = tokenIdentifier.startsWith("0x");
+                const symbol = params.get("symbol");
                 
                 const transferParams: TokenFungibleTransferParams = {
                     username: tweet.username,
-                    recipient,
-                    amount,
-                    ...(isAddress ? { tokenAddress: tokenIdentifier } : { symbol: tokenIdentifier })
+                    symbol: symbol,
+                    recipient: recipient,
+                    amount: amount,
+                    tweetId: tweet.id
                 };
 
                 const result = await this.stage_execute(transferParams);
 
                 if (result.success) {
                     const networkSetting = runtime.getSetting("MOVEMENT_NETWORK") || DEFAULT_NETWORK;
-                    const network = MOVEMENT_NETWORK_CONFIG[networkSetting] || MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
-                    const explorerUrl = ``;
+                    const network = MOVEMENT_NETWORK_CONFIG[networkSetting];
+                    const explorerUrl = `${MOVEMENT_EXPLORER_URL}/${result.transactionId}?network=${network.explorerNetwork}`;
                     
+                    const displayRecipient = recipient.startsWith("0x") ? recipient : `@${recipient}`;
                     return {
-                        response: `✅ Transfer successful!\n\nAmount: ${amount} ${isAddress ? 'tokens' : tokenIdentifier}\nTo: ${recipient}\n\nView transaction: ${explorerUrl}`,
+                        response: `✅ Transfer successful!\n\nAmount: ${amount} ${symbol}\nTo: ${displayRecipient}\n\nView transaction: ${explorerUrl}`,
                         data: { transactionId: result.transactionId },
                         action: "EXECUTE_ACTION"
                     };
@@ -331,6 +522,87 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
             }
         };
 
-        this.registerAction(transferAction);
+        const collectTokenOwnerAction: IKeywordAction = {
+            name: "collect_token_owner",
+            description: "Collect token owner information",
+            examples: ["@owner"],
+            requiredParameters: [
+                {
+                    name: "token_owner",
+                    prompt: "Please provide the Twitter username of the token owner",
+                    extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
+
+Parameter to extract: token_owner
+Parameter description: A valid Twitter username (starting with @)
+
+User's message:
+{{userMessage}}
+
+Previous conversation context:
+{{conversationContext}}
+
+# Instructions:
+1. Extract the value for the specified parameter
+2. Consider both explicit and implicit mentions in the context
+3. Consider common variations and synonyms
+4. Return your response in this JSON format:
+{
+    "extracted": true/false,
+    "value": "extracted_value or null if not found",
+    "confidence": "HIGH/MEDIUM/LOW",
+    "alternativeValues": ["other", "possible", "interpretations"],
+    "clarificationNeeded": true/false,
+    "suggestedPrompt": "A natural way to ask for clarification if needed",
+    "reasoning": "Brief explanation of the extraction logic"
+}
+
+Only respond with the JSON, no other text.`,
+                    validator: (value: string) => /^@?\w{1,15}$/.test(value)
+                }
+            ],
+            action: async (tweet: Tweet, runtime: IAgentRuntime, params: Map<string, string>) => {
+                const tokenOwner = params.get("token_owner").replace('@', '');
+                const symbol = params.get("symbol").toUpperCase();
+                const contractAddress = "0xf17f471f57b12eb5a8bd1d722b385b5f1f0606d07b553828c344fb4949fd2a9d";
+
+                const network = MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
+                const aptosClient = new Aptos(
+                    new AptosConfig({
+                        network: Network.CUSTOM,
+                        fullnode: network.fullnode,
+                    })
+                );
+
+                try {
+                    const balance = await this.checkUserCreatedTokenBalance(
+                        aptosClient,
+                        contractAddress,
+                        tweet.username,
+                        tokenOwner,
+                        symbol
+                    );
+
+                    return {
+                        response: `How many ${symbol} tokens would you like to transfer? Your current balance is ${balance} ${symbol}`,
+                        action: "COLLECT_AMOUNT"
+                    };
+                } catch (error) {
+                    if (error.message?.includes("0x51001")) {
+                        return {
+                            response: "Token owner not found. Please check the username and try again.",
+                            action: "ERROR"
+                        };
+                    }
+                    return {
+                        response: "An error occurred while checking the token balance. Please try again.",
+                        action: "ERROR"
+                    };
+                }
+            }
+        };
+
+        this.registerAction(transferTokenAction);
+        this.registerAction(collectAmountAction);
+        this.registerAction(collectTokenOwnerAction);
     }
 } 

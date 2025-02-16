@@ -100,7 +100,7 @@ export class TwitterInteractionClient {
     private static isProcessing: boolean = false;
     protected static isLoggedIn: boolean = false;
     protected static readonly PROCESSING_INTERVAL = 600; // 1 minute
-    protected static readonly TIMEOUT = 30000; // 30 seconds
+    protected static readonly TIMEOUT = 3000000; // 30 seconds
 
     constructor(client: ClientBase, runtime: IAgentRuntime) {
         this.client = client;
@@ -178,7 +178,7 @@ export class TwitterInteractionClient {
     async start() {
         if (!await this.ensureLogin()) {
             elizaLogger.error("Failed to initialize TwitterInteractionClient, retrying in 30 seconds");
-            setTimeout(() => this.start(), 30000);
+            setTimeout(() => this.start(), 3000);
             return;
         }
 
