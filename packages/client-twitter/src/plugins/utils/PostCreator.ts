@@ -1,9 +1,10 @@
 import puppeteer from "puppeteer";
 import { PinataSDK } from "pinata-web3";
+import { elizaLogger } from "@elizaos/core";
 
 export class TweetImageUploader {
     private pinata: PinataSDK;
-    private browserPath: string = "/opt/homebrew/bin/chromium"; // Adjust for your system
+    private browserPath: string = "/snap/bin/chromium"; // Adjust for your system
 
     constructor() {
         const pinataJwt = process.env.PINATA_JWT;
@@ -24,26 +25,30 @@ export class TweetImageUploader {
      */
     private async fetchImageBase64(tweetUrl: string): Promise<string | null> {
         const browser = await puppeteer.launch({ headless: false, executablePath: this.browserPath });
-        const page = await browser.newPage();
+        try {
+            const page = await browser.newPage();
         
-        // Navigate to the tweet-to-image converter
-        await page.goto("https://10015.io/tools/tweet-to-image-converter");
+            // Navigate to the tweet-to-image converter
+            await page.goto("https://10015.io/tools/tweet-to-image-converter");
 
-        // Input tweet URL
-        await page.type("#tweetUrl", tweetUrl);
-        await page.click("#__next > main > div > div > div > div.sc-bcXHqe.sc-gswNZR.filuRp.bbLVwL > div:nth-child(2) > button");
+            // Input tweet URL
+            await page.type("#tweetUrl", tweetUrl);
+            await page.click("#__next > main > div > div > div > div.sc-bcXHqe.sc-gswNZR.filuRp.bbLVwL > div:nth-child(2) > button");
 
-        // Wait for the image to appear
-        await page.waitForSelector("#__next > main > div > div > div > div.sc-be18d063-0.gmdLNk > div > div > div > div > div > svg > image");
+            // Wait for the image to appear
+            await page.waitForSelector("#__next > main > div > div > div > div.sc-be18d063-0.gmdLNk > div > div > div > div > div > svg > image");
 
-        // Extract Base64 image URL
-        const base64Image = await page.evaluate(() => {
-            const img = document.querySelector("#__next > main > div > div > div > div.sc-be18d063-0.gmdLNk > div > div > div > div > div > svg > image") as HTMLImageElement | null;
-            return img ? img.getAttribute("href") || img.getAttribute("xlink:href") || img.getAttribute("src") : null;
-        });
-
-        await browser.close();
-        return base64Image?.replace("data:image/png;base64,", "") ?? null;
+            // Extract Base64 image URL
+            const base64Image = await page.evaluate(() => {
+                const img = document.querySelector("#__next > main > div > div > div > div.sc-be18d063-0.gmdLNk > div > div > div > div > div > svg > image") as HTMLImageElement | null;
+                return img ? img.getAttribute("href") || img.getAttribute("xlink:href") || img.getAttribute("src") : null;
+            });
+            return base64Image?.replace("data:image/png;base64,", "") ?? null;
+        } catch (error) {
+            throw error
+        } finally {
+            await browser.close()
+        }
     }
 
     /**
@@ -67,20 +72,26 @@ export class TweetImageUploader {
      * @returns IPFS URL of the uploaded image.
      */
     public async uploadTweetImage(tweetUrl: string): Promise<string | null> {
-        console.log("Fetching tweet image...");
-        const base64Image = await this.fetchImageBase64(tweetUrl);
-        if (!base64Image) {
-            console.error("Failed to retrieve image.");
-            return null;
+        elizaLogger.info("Fetching tweet image...");
+        let base64Image: string;
+        try {
+            base64Image = await this.fetchImageBase64(tweetUrl);
+            if (!base64Image) {
+                elizaLogger.error("Failed to retrieve image.");
+                return null;
+            }
+        } catch(error) {
+            throw Error("error in generating image for the tweet. Kindly retry.")
         }
+        
 
-        console.log("Uploading image to IPFS...");
+        elizaLogger.info("Uploading image to IPFS...");
         const ipfsUrl = await this.uploadToPinata(base64Image);
 
         if (ipfsUrl) {
-            console.log("Image successfully uploaded to IPFS:", ipfsUrl);
+            elizaLogger.info("Image successfully uploaded to IPFS:", ipfsUrl);
         } else {
-            console.error("Image upload failed.");
+            elizaLogger.error("Image upload failed.");
         }
 
         return ipfsUrl;

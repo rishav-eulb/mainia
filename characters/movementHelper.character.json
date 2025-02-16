@@ -1,6 +1,6 @@
 {
     "name": "MovementHelper",
-    "clients": ["telegram","twitter"],
+    "clients": ["twitter"],
     "modelProvider": "anthropic",
     "settings": {
         "voice": {

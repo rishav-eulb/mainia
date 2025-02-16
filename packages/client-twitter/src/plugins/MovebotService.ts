@@ -12,22 +12,20 @@ import { TwitterInteractionClient } from "../interactions";
 import { buildConversationThread, sendTweet } from "../utils";
 import { KeywordActionPlugin } from "./KeywordActionPlugin";
 import { SearchMode } from "agent-twitter-client";
-import { TokenTransferPlugin } from "./TokenTransferPlugin";
+import { WalletTransferPlugin } from "./WalletTransferPlugin";
 import { WalletManagementPlugin } from "./WalletManagementPlugin";
-import { TokenFungibleTransferPlugin } from "./TokenFungibleTransferPlugin";
-import { TokenOwnershipTransferPlugin } from "./TokenOwnershipTransferPlugin";
 import { TokenCreationPlugin } from "./TokenCreationPlugin";
 import { ImageGenerationPlugin } from "./ImageGenerationPlugin";
 import { env } from "process";
 import { TweetImageUploader } from "./utils/PostCreator";
+import { NFTPlugin } from "./NFTPlugin";
 
 export class MovebotService extends TwitterInteractionClient {
     private keywordPlugin: KeywordActionPlugin;
-    private tokenTransferPlugin: TokenTransferPlugin;
+    private walletTransferPlugin: WalletTransferPlugin;
     private walletManagementPlugin: WalletManagementPlugin;
-    private tokenFungibleTransferPlugin: TokenFungibleTransferPlugin;
-    private tokenOwnershipTransferPlugin: TokenOwnershipTransferPlugin;
     private tokenCreationPlugin: TokenCreationPlugin;
+    private nftPlugin: NFTPlugin;
     private imageGenerationPlugin: ImageGenerationPlugin;
     private processingLock: boolean = false;
     private tweetImageCreator: TweetImageUploader;
@@ -41,29 +39,26 @@ export class MovebotService extends TwitterInteractionClient {
     constructor(client: ClientBase, runtime: IAgentRuntime) {
         super(client, runtime);
         this.keywordPlugin = new KeywordActionPlugin(client, runtime);
-        this.tokenTransferPlugin = new TokenTransferPlugin();
+        this.walletTransferPlugin = new WalletTransferPlugin();
         this.walletManagementPlugin = new WalletManagementPlugin();
-        this.tokenFungibleTransferPlugin = new TokenFungibleTransferPlugin();
-        this.tokenOwnershipTransferPlugin = new TokenOwnershipTransferPlugin();
         this.tokenCreationPlugin = new TokenCreationPlugin();
-        this.imageGenerationPlugin = new ImageGenerationPlugin();
+        // this.imageGenerationPlugin = new ImageGenerationPlugin();
+        this.nftPlugin = new NFTPlugin();
         this.tweetImageCreator = new TweetImageUploader();
         
         // Initialize and register all plugins
         Promise.all([
-            this.tokenTransferPlugin.initialize(client, runtime),
+            this.walletTransferPlugin.initialize(client, runtime),
             this.walletManagementPlugin.initialize(client, runtime),
-            this.tokenFungibleTransferPlugin.initialize(client, runtime),
-            this.tokenOwnershipTransferPlugin.initialize(client, runtime),
             this.tokenCreationPlugin.initialize(client, runtime),
-            this.imageGenerationPlugin.initialize(client, runtime)
+            this.nftPlugin.initialize(client, runtime)
+            // this.imageGenerationPlugin.initialize(client, runtime)
         ]).then(() => {
-            this.keywordPlugin.registerPlugin(this.tokenTransferPlugin);
+            this.keywordPlugin.registerPlugin(this.walletTransferPlugin);
             this.keywordPlugin.registerPlugin(this.walletManagementPlugin);
-            this.keywordPlugin.registerPlugin(this.tokenFungibleTransferPlugin);
-            this.keywordPlugin.registerPlugin(this.tokenOwnershipTransferPlugin);
             this.keywordPlugin.registerPlugin(this.tokenCreationPlugin);
-            this.keywordPlugin.registerPlugin(this.imageGenerationPlugin);
+            this.keywordPlugin.registerPlugin(this.nftPlugin);
+            // this.keywordPlugin.registerPlugin(this.imageGenerationPlugin);
             elizaLogger.info("MovebotService: All plugins registered");
         }).catch(error => {
             elizaLogger.error("MovebotService: Failed to initialize plugins:", error);
@@ -282,7 +277,8 @@ export class MovebotService extends TwitterInteractionClient {
                 return { text: "", action: "IGNORE" };
             }
 
-            tweet.text = tweet.text.replace(`@${env.TWITTER_USERNAME}`,'')
+            tweet.text = tweet.text.replaceAll(`@${env.TWITTER_USERNAME}`,'')
+            elizaLogger.info(tweet.text)
 
             // Process with KeywordActionPlugin directly
             const result = await this.safeApiCall(async () => 

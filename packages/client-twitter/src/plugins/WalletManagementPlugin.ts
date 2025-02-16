@@ -224,7 +224,6 @@ export class WalletManagementPlugin implements IKeywordPlugin {
             action: async (tweet: Tweet, runtime: IAgentRuntime) => {
                 elizaLogger.info("WalletManagementPlugin: Processing wallet action for user:", tweet.username);
                 
-                // Determine the action based on the tweet content
                 const text = tweet.text.toLowerCase();
                 const action = text.includes('balance') ? 'GET_BALANCE' : 'GET_ADDRESS';
 
@@ -241,11 +240,11 @@ export class WalletManagementPlugin implements IKeywordPlugin {
                             response: `Your custodial wallet address is:\n${result.address}`,
                             action: "ADDRESS_RETRIEVED"
                         };
-                    } else if (result.balance) {
-                        return {
-                            response: `Your wallet balance is: ${result.balance} MOVE`,
-                            action: "BALANCE_RETRIEVED"
-                        };
+                                        } else if (result.balance) {
+                            return {
+                                response: `Your wallet balance is: ${result.balance} MOVE`,
+                                action: "BALANCE_RETRIEVED"
+                            };
                     }
                 } else if (result.needsRegistration) {
                     return {

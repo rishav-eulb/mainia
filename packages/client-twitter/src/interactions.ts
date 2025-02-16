@@ -100,7 +100,7 @@ export class TwitterInteractionClient {
     private static isProcessing: boolean = false;
     protected static isLoggedIn: boolean = false;
     protected static readonly PROCESSING_INTERVAL = 600; // 1 minute
-    protected static readonly TIMEOUT = 3000000; // 30 seconds
+    protected static readonly TIMEOUT = 6000000; // 60 seconds
 
     constructor(client: ClientBase, runtime: IAgentRuntime) {
         this.client = client;

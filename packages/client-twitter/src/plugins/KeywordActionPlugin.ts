@@ -17,7 +17,7 @@ import { ClientBase } from "../base";
 export interface IParameterRequirement {
     name: string;
     prompt: string;
-    validator?: (value: string, runtime?: IAgentRuntime) => Promise<boolean>;
+    validator?: (value: string, runtime?: IAgentRuntime) => boolean | Promise<boolean>;
     extractorTemplate?: string; // Template for parameter extraction
 }
 
@@ -29,6 +29,7 @@ export interface IKeywordAction {
     description: string;    // Description of what the action does
     examples: string[];     // Example phrases that indicate this action
     requiredParameters?: IParameterRequirement[];  // Parameters needed for this action
+    preprocessTweet?: (tweet: Tweet, runtime: IAgentRuntime) => Promise<Map<string, string>>
     action: (tweet: Tweet, runtime: IAgentRuntime, collectedParams?: Map<string, string>) => Promise<{
         response: string;  // The response to send back
         data?: any;       // Any additional data from the action
@@ -344,43 +345,55 @@ export class KeywordActionPlugin {
         data?: any;
         needsMoreInput?: boolean;
     }> {
-        // Fall back to standard keyword action processing
-        const userId = tweet.userId;
-
-        // If no ongoing session then try the plugins
-        if(!this.pendingActions.has(userId)) {
-            for (const plugin of this.plugins.values()) {
-                if (plugin.handleTweet) {
-                    try {
-                        const result = await plugin.handleTweet(tweet, this.runtime);
-                        if (result.response || result.action) {
-                            return {
-                                hasAction: true,
-                                action: result.action,
-                                response: result.response,
-                                data: result.data
-                            };
-                        }
-                    } catch (error) {
-                        elizaLogger.error(`Error in plugin ${plugin.name} handleTweet:`, error);
+        // First try plugin-specific handlers
+        for (const plugin of this.plugins.values()) {
+            if (plugin.handleTweet) {
+                try {
+                    const result = await plugin.handleTweet(tweet, this.runtime);
+                    if (result.response || result.action) {
+                        return {
+                            hasAction: true,
+                            action: result.action,
+                            response: result.response,
+                            data: result.data
+                        };
                     }
+                } catch (error) {
+                    elizaLogger.error(`Error in plugin ${plugin.name} handleTweet:`, error);
                 }
             }
         }
+
+        // Fall back to standard keyword action processing
+        const userId = tweet.userId;
        
         if (!this.pendingActions.has(userId)) {
             const intent = await this.recognizeIntent(tweet);
-            elizaLogger.debug("KeywordActionPlugin: Intent recognition result:", intent);
+            elizaLogger.info("KeywordActionPlugin: Intent recognition result:", intent);
             
             if (intent?.hasIntent && intent?.actionName && intent.confidence !== 'LOW') {
                const actionHandler = this.actions.find(a => a.name === intent.actionName);
-               elizaLogger.debug("KeywordActionPlugin: Found action handler:", actionHandler?.name);
+               elizaLogger.info("KeywordActionPlugin: Found action handler:", actionHandler?.name);
                 if (actionHandler) {
-                // Initialize new action with extracted parameters
+                    // Initialize new action with extracted parameters
                     const collectedParams = new Map<string, string>();
+                    if(actionHandler.preprocessTweet) {
+                        try {
+                            elizaLogger.info("started preproccessing", actionHandler.preprocessTweet);
+                            (await actionHandler.preprocessTweet(tweet, this.runtime)).forEach((key, val) => {
+                                collectedParams.set(key, val);
+                            })   
+                        } catch (error) {
+                            const errorString = error instanceof Error ? error.message : String(error)
+                            elizaLogger.error("error in ", errorString); 
+                            return {
+                                hasAction: true,
+                                response: errorString
+                            };
+                        }
+                    }
 
-
-                // Start parameter collection with a natural response
+                    // Start parameter collection with a natural response
                     this.pendingActions.set(userId, {
                         actionHandler,
                         collectedParams,
@@ -427,7 +440,7 @@ export class KeywordActionPlugin {
                     });
 
                     if ((extraction?.extracted || extraction?.optional) && extraction?.confidence !== 'LOW') {
-                        if (!paramReq.validator || (await paramReq.validator(extraction.value, this.runtime))) {
+                        if (!paramReq.validator || paramReq.validator(extraction.value, this.runtime)) {
 
                             elizaLogger.info("KeywordActionPlugin: Extraction validation:", {
                                 extraction,
@@ -438,19 +451,22 @@ export class KeywordActionPlugin {
                                 `Bot: ${extraction.suggestedPrompt || `Great! I got the ${paramReq.name}.`}`
                             );
                             continue;
-                        } else {
+                        }
+                        else {
                             pendingAction.clarificationCount++;
-                            if (pendingAction.clarificationCount <= this.MAX_CLARIFICATIONS) {
-                                const prompt = extraction.suggestedPrompt || paramReq.prompt;
-                                if (prompt !== pendingAction.lastParameterPrompt) {
-                                    pendingAction.lastParameterPrompt = prompt;
-                                    return {
-                                        hasAction: true,
-                                        response: prompt,
-                                        needsMoreInput: true
-                                    };
-                                }
+                             if (pendingAction.clarificationCount <= this.MAX_CLARIFICATIONS) {
+                                 const prompt = extraction.suggestedPrompt || paramReq.prompt;
+                                 if (prompt !== pendingAction.lastParameterPrompt) {
+                                   pendingAction.lastParameterPrompt = prompt;
+                                   return {
+                                    hasAction: true,
+                                    response: prompt,
+                                    needsMoreInput: true
+                             };
                             }
+                        }
+
+
                         }
                     }
 
@@ -468,6 +484,7 @@ export class KeywordActionPlugin {
                                 };
                             }
                         }
+                        
                     }
 
                     // If we couldn't extract and haven't asked too many times, ask for it
@@ -478,6 +495,8 @@ export class KeywordActionPlugin {
                     };
                 }
             }
+
+            elizaLogger.info("collected all params, executing action.")
 
             // Execute action with all parameters
             try {
