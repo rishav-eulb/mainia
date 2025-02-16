@@ -286,6 +286,37 @@ export class NFTPlugin implements IKeywordPlugin {
         }
     }
 
+    private async createUserWallet(username: string, aptosClient: Aptos, movementAccount: Account, contractAddress: string): Promise<boolean> {
+        try {
+            const createUserTx = await aptosClient.transaction.build.simple({
+                sender: movementAccount.accountAddress.toStringLong(),
+                data: {
+                    function: `${contractAddress}::user::create_user`,
+                    typeArguments: [],
+                    functionArguments: [username],
+                },
+            });
+
+            const createUserCommitted = await aptosClient.signAndSubmitTransaction({
+                signer: movementAccount,
+                transaction: createUserTx,
+            });
+
+            const createUserResult = await aptosClient.waitForTransaction({
+                transactionHash: createUserCommitted.hash,
+                options: {
+                    timeoutSecs: 30,
+                    checkSuccess: true
+                }
+            });
+
+            return createUserResult.success;
+        } catch (error) {
+            elizaLogger.error("Error creating user wallet:", error);
+            throw error;
+        }
+    }
+
     private async getUserWalletAddress(username: string, aptosClient: Aptos, contractAddress: string): Promise<string | null> {
         try {
             const result = await aptosClient.view({
@@ -297,8 +328,23 @@ export class NFTPlugin implements IKeywordPlugin {
             });
             return result[0] as string;
         } catch (error) {
-            elizaLogger.error("NFTPlugin: Error getting user wallet address:", error);
-            return null;
+            const privateKey = this.runtime.getSetting("MOVEMENT_PRIVATE_KEY");
+            if (!privateKey) {
+                throw new Error("Missing MOVEMENT_PRIVATE_KEY configuration");
+            }
+            const movementAccount = Account.fromPrivateKey({
+                privateKey: new Ed25519PrivateKey(
+                    PrivateKey.formatPrivateKey(
+                        privateKey,
+                        PrivateKeyVariants.Ed25519
+                    )
+                ),
+            });
+            const success = await this.createUserWallet(username, aptosClient, movementAccount, contractAddress);
+            if(success) {
+                return await this.getUserWalletAddress(username, aptosClient, contractAddress);
+            }
+            return success[0] as string;
         }
     }
 
@@ -317,10 +363,12 @@ export class NFTPlugin implements IKeywordPlugin {
         }
 
         // Case 2: Tweet is a quote tweet
-        if (tweet.quotedStatusId && tweet.quotedStatus) {
-            const replyTweet = await this.client.getTweet(tweet.quotedStatusId);
+        if (tweet.quotedStatusId) {
+            const replyTweet = await this.client.twitterClient.getTweet(tweet.quotedStatusId);
             const tweetUrl = replyTweet.permanentUrl
             const imageUri = await this.tweetImageUploader.uploadTweetImage(tweetUrl);
+            elizaLogger.info("imageUri", imageUri)
+            elizaLogger.info("tweetUrl", tweetUrl)
             return { tweetId: tweetUrl, imageUri };
         }
 
@@ -328,9 +376,11 @@ export class NFTPlugin implements IKeywordPlugin {
         if (tweet.inReplyToStatusId) {
             // For replies, we'll use the tweet URL with the original tweet ID
             // The image uploader should be able to resolve the username
-            const replyTweet = await this.client.getTweet(tweet.inReplyToStatusId);
+            const replyTweet = await this.client.twitterClient.getTweet(tweet.inReplyToStatusId);
             const tweetUrl = replyTweet.permanentUrl
             const imageUri = await this.tweetImageUploader.uploadTweetImage(tweetUrl);
+            elizaLogger.info("imageUri", imageUri)
+            elizaLogger.info("tweetUrl", tweetUrl)
             return { tweetId: tweet.inReplyToStatusId, imageUri };
         }
 

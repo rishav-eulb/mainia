@@ -1,6 +1,7 @@
 import puppeteer from "puppeteer";
 import { PinataSDK } from "pinata-web3";
 import { elizaLogger } from "@elizaos/core";
+import { string } from "zod";
 
 export class TweetImageUploader {
     private pinata: PinataSDK;
@@ -45,6 +46,7 @@ export class TweetImageUploader {
             });
             return base64Image?.replace("data:image/png;base64,", "") ?? null;
         } catch (error) {
+            elizaLogger.error("error in fetching image", error instanceof Error ? error.message: String(error))
             throw error
         } finally {
             await browser.close()

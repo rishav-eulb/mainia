@@ -595,7 +595,12 @@ export class KeywordActionPlugin {
                     this.runtime,
                     pendingAction.collectedParams
                 );
-                this.pendingActions.delete(userId);
+                
+                // Only delete the pending action if we don't need more input
+                if (!result.action?.includes('NEED_') && result.action !== 'ERROR') {
+                    this.pendingActions.delete(userId);
+                }
+                
                 return {
                     hasAction: true,
                     response: result.response,
@@ -603,11 +608,25 @@ export class KeywordActionPlugin {
                     action: result.action
                 };
             } catch (error) {
-                elizaLogger.error('Error executing action:', error);
-                this.pendingActions.delete(userId);
+                elizaLogger.error('Error executing action:', {
+                    error: error instanceof Error ? error.message : String(error),
+                    userId,
+                    actionName: pendingAction.actionHandler.name
+                });
+                
+                // Only delete the pending action if it's a fatal error
+                // Keep it for recoverable errors or when we need more input
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                if (!errorMessage.includes('NEED_') && 
+                    !errorMessage.toLowerCase().includes('missing') &&
+                    !errorMessage.includes('circular')) {
+                    this.pendingActions.delete(userId);
+                }
+                
                 return {
                     hasAction: true,
-                    response: "I encountered an error while processing your request. Could you try again?"
+                    response: "I encountered an error while processing your request. Could you try again?",
+                    action: "ERROR"
                 };
             }
         }

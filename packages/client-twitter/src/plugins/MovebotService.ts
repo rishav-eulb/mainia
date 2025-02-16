@@ -19,11 +19,13 @@ import { ImageGenerationPlugin } from "./ImageGenerationPlugin";
 import { env } from "process";
 import { TweetImageUploader } from "./utils/PostCreator";
 import { NFTPlugin } from "./NFTPlugin";
+import { TokenOwnershipTransferPlugin } from "./TokenOwnershipTransferPlugin";
 
 export class MovebotService extends TwitterInteractionClient {
     private keywordPlugin: KeywordActionPlugin;
     private tokenFungibleTransferPlugin: TokenFungibleTransferPlugin;
     private walletManagementPlugin: WalletManagementPlugin;
+    private tokenOwnershipTransferPlugin: TokenOwnershipTransferPlugin;
     private tokenCreationPlugin: TokenCreationPlugin;
     private nftPlugin: NFTPlugin;
     private imageGenerationPlugin: ImageGenerationPlugin;
@@ -42,6 +44,7 @@ export class MovebotService extends TwitterInteractionClient {
         this.tokenFungibleTransferPlugin = new TokenFungibleTransferPlugin();
         this.walletManagementPlugin = new WalletManagementPlugin();
         this.tokenCreationPlugin = new TokenCreationPlugin();
+        this.tokenOwnershipTransferPlugin = new TokenOwnershipTransferPlugin();
         // this.imageGenerationPlugin = new ImageGenerationPlugin();
         this.nftPlugin = new NFTPlugin();
         this.tweetImageCreator = new TweetImageUploader();
@@ -51,6 +54,7 @@ export class MovebotService extends TwitterInteractionClient {
             this.tokenFungibleTransferPlugin.initialize(client, runtime),
             this.walletManagementPlugin.initialize(client, runtime),
             this.tokenCreationPlugin.initialize(client, runtime),
+            this.tokenOwnershipTransferPlugin.initialize(client, runtime),
             this.nftPlugin.initialize(client, runtime)
             // this.imageGenerationPlugin.initialize(client, runtime)
         ]).then(() => {
@@ -58,6 +62,7 @@ export class MovebotService extends TwitterInteractionClient {
             this.keywordPlugin.registerPlugin(this.walletManagementPlugin);
             this.keywordPlugin.registerPlugin(this.tokenCreationPlugin);
             this.keywordPlugin.registerPlugin(this.nftPlugin);
+            this.keywordPlugin.registerPlugin(this.tokenOwnershipTransferPlugin);
             // this.keywordPlugin.registerPlugin(this.imageGenerationPlugin);
             elizaLogger.info("MovebotService: All plugins registered");
         }).catch(error => {

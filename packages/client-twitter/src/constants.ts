@@ -17,7 +17,7 @@ export const MOVEMENT_NETWORK_CONFIG = {
         fullnode: 'https://aptos.testnet.porto.movementlabs.xyz/v1',
         chainId: '177',
         name: 'Movement Porto Testnet',
-        explorerNetwork: 'porto+testnet'
+        explorerNetwork: 'testnet'
     }
 } as const;
 

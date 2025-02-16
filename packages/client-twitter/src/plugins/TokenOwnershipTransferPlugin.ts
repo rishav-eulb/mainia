@@ -52,6 +52,37 @@ export class TokenOwnershipTransferPlugin implements IKeywordPlugin {
         });
     }
 
+    private async createUserWallet(username: string, aptosClient: Aptos, movementAccount: Account, contractAddress: string): Promise<boolean> {
+        try {
+            const createUserTx = await aptosClient.transaction.build.simple({
+                sender: movementAccount.accountAddress.toStringLong(),
+                data: {
+                    function: `${contractAddress}::user::create_user`,
+                    typeArguments: [],
+                    functionArguments: [username],
+                },
+            });
+
+            const createUserCommitted = await aptosClient.signAndSubmitTransaction({
+                signer: movementAccount,
+                transaction: createUserTx,
+            });
+
+            const createUserResult = await aptosClient.waitForTransaction({
+                transactionHash: createUserCommitted.hash,
+                options: {
+                    timeoutSecs: 30,
+                    checkSuccess: true
+                }
+            });
+
+            return createUserResult.success;
+        } catch (error) {
+            elizaLogger.error("Error creating user wallet:", error);
+            throw error;
+        }
+    }
+
     private async getUserWalletAddress(username: string, aptosClient: Aptos, contractAddress: string): Promise<string | null> {
         try {
             const result = await aptosClient.view({
@@ -63,11 +94,23 @@ export class TokenOwnershipTransferPlugin implements IKeywordPlugin {
             });
             return result[0] as string;
         } catch (error) {
-            elizaLogger.error("Error fetching user wallet address:", {
-                error: error instanceof Error ? error.message : String(error),
-                username
+            const privateKey = this.runtime.getSetting("MOVEMENT_PRIVATE_KEY");
+            if (!privateKey) {
+                throw new Error("Missing MOVEMENT_PRIVATE_KEY configuration");
+            }
+            const movementAccount = Account.fromPrivateKey({
+                privateKey: new Ed25519PrivateKey(
+                    PrivateKey.formatPrivateKey(
+                        privateKey,
+                        PrivateKeyVariants.Ed25519
+                    )
+                ),
             });
-            throw error;
+            const success = await this.createUserWallet(username, aptosClient, movementAccount, contractAddress);
+            if(success) {
+                return await this.getUserWalletAddress(username, aptosClient, contractAddress);
+            }
+            return success[0] as string;
         }
     }
 
@@ -247,10 +290,18 @@ export class TokenOwnershipTransferPlugin implements IKeywordPlugin {
                     };
                 }
 
-                if (error.message?.includes("0x60002")) {
+                if (error.message?.includes("0x55004")) {
                     return {
                         success: false,
-                        error: "The specified token does not exist or you don't have ownership rights.",
+                        error: "You don't have ownership rights.",
+                        action: "TOKEN_OWNERSHIP_NOT_FOUND"
+                    };
+                }
+
+                if (error.message?.includes("0x65003")) {
+                    return {
+                        success: false,
+                        error: "This token does not exist.",
                         action: "TOKEN_NOT_FOUND"
                     };
                 }
@@ -282,16 +333,19 @@ export class TokenOwnershipTransferPlugin implements IKeywordPlugin {
                 "@radhemfeulb69 transfer token 0x789... ownership to 0x123...",
                 "@radhemfeulb69 transfer ownership of token 0x789... to @user",
                 "@radhemfeulb69 transfer ownership of token TEST to @user",
-                "@radhemfeulb69 transfer token 0x789... ownership to @user"
+                "@radhemfeulb69 transfer token 0x789... ownership to @user",
+                "@radhemfeulb69 transfer ownership to @user",
+                 "@radhemfeulb69 transfer ownership to  0x125..."
+
             ],
             requiredParameters: [
                 {
                     name: "tokenIdentifier",
-                    prompt: "Please provide either the token symbol (e.g., TEST) or the token address (starting with 0x)",
+                    prompt: "Please provide either the token symbol (e.g., TEST)",
                     extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
 
 Parameter to extract: tokenIdentifier
-Parameter description: Either a token symbol (2-10 characters, uppercase) or a token address (starting with 0x).
+Parameter description: Either a token symbol (2-10 characters, uppercase).
 
 User's message:
 {{userMessage}}
@@ -316,7 +370,7 @@ Previous conversation context:
 
 Only respond with the JSON, no other text.`,
                     validator: (value: string) => {
-                        return /^[A-Z0-9]{2,10}$/.test(value) || /^0x[0-9a-fA-F]{64}$/.test(value);
+                        return /^[A-Z0-9]{2,10}$/.test(value);
                     }
                 },
                 {

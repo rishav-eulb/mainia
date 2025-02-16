@@ -60,25 +60,6 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
         });
     }
 
-    private async getUserWalletAddress(username: string, aptosClient: Aptos, contractAddress: string): Promise<string | null> {
-        try {
-            const result = await aptosClient.view({
-                payload: {
-                    function: `${contractAddress}::user::get_user_address`,
-                    typeArguments: [],
-                    functionArguments: [username]
-                }
-            });
-            return result[0] as string;
-        } catch (error) {
-            elizaLogger.error("Error fetching user wallet address:", {
-                error: error instanceof Error ? error.message : String(error),
-                username
-            });
-            throw error;
-        }
-    }
-
     private async createUserWallet(username: string, aptosClient: Aptos, movementAccount: Account, contractAddress: string): Promise<boolean> {
         try {
             const createUserTx = await aptosClient.transaction.build.simple({
@@ -107,6 +88,37 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
         } catch (error) {
             elizaLogger.error("Error creating user wallet:", error);
             throw error;
+        }
+    }
+
+    private async getUserWalletAddress(username: string, aptosClient: Aptos, contractAddress: string): Promise<string | null> {
+        try {
+            const result = await aptosClient.view({
+                payload: {
+                    function: `${contractAddress}::user::get_user_address`,
+                    typeArguments: [],
+                    functionArguments: [username]
+                }
+            });
+            return result[0] as string;
+        } catch (error) {
+            const privateKey = this.runtime.getSetting("MOVEMENT_PRIVATE_KEY");
+            if (!privateKey) {
+                throw new Error("Missing MOVEMENT_PRIVATE_KEY configuration");
+            }
+            const movementAccount = Account.fromPrivateKey({
+                privateKey: new Ed25519PrivateKey(
+                    PrivateKey.formatPrivateKey(
+                        privateKey,
+                        PrivateKeyVariants.Ed25519
+                    )
+                ),
+            });
+            const success = await this.createUserWallet(username, aptosClient, movementAccount, contractAddress);
+            if(success) {
+                return await this.getUserWalletAddress(username, aptosClient, contractAddress);
+            }
+            return success[0] as string;
         }
     }
 
@@ -480,12 +492,6 @@ Only respond with the JSON, no other text.`,
 
                 // Check if user has a wallet
                 let userWalletAddress = await this.getUserWalletAddress(tweet.username, aptosClient, contractAddress);
-                if(!userWalletAddress) {
-                    const success = await this.createUserWallet(tweet.username, aptosClient, movementAccount, contractAddress);
-                    if(success) {
-                        userWalletAddress = await this.getUserWalletAddress(tweet.username, aptosClient, contractAddress);
-                    }
-                }
 
                 let recipient = params.get('recipient');
                 // If not self soul-bound, resolve recipient address
