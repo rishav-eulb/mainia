@@ -120,12 +120,6 @@ export class NFTPlugin implements IKeywordPlugin {
                 fullnode: network.fullnode,
             }));
 
-            // Generate resource URI from tweet
-            const resourceUri = await this.tweetImageUploader.uploadTweetImage(params.tweetId);
-            if (!resourceUri) {
-                throw new Error(ERROR_MESSAGES.IMAGE_GENERATION_ERROR);
-            }
-
             let tx;
             try {
                 switch (action) {
@@ -470,7 +464,7 @@ Only respond with the JSON, no other text.`
             action: async (tweet: Tweet, runtime: IAgentRuntime, params: Map<string, string>) => {
                 try {
                     const isSelfSoulBound = params.get("recipient")?.toLowerCase() === "self";
-                    let recipient = isSelfSoulBound ? undefined : params.get("recipient");
+                    let recipient = isSelfSoulBound ? `@${tweet.username}` : params.get("recipient");
 
                     // Get tweet ID and image based on context
                     const { tweetId, imageUri } = { tweetId: params.get("tweetId"), imageUri: params.get("imageUri") }
@@ -482,29 +476,27 @@ Only respond with the JSON, no other text.`
                     }
 
                     // If not self soul-bound, resolve recipient address
-                    if (!isSelfSoulBound && recipient) {
-                        if (recipient.startsWith("@")) {
-                            const username = recipient.substring(1);
-                            const network = MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
-                            const aptosClient = new Aptos(new AptosConfig({
-                                network: Network.CUSTOM,
-                                fullnode: network.fullnode,
-                            }));
-                            
-                            const resolvedAddress = await this.getUserWalletAddress(
-                                username,
-                                aptosClient,
-                                "0xf17f471f57b12eb5a8bd1d722b385b5f1f0606d07b553828c344fb4949fd2a9d"
-                            );
-                            
-                            if (!resolvedAddress) {
-                                return {
-                                    response: ERROR_MESSAGES.WALLET_RESOLVE_ERROR,
-                                    action: "ERROR"
-                                };
-                            }
-                            recipient = resolvedAddress;
+                    if (recipient.startsWith("@")) {
+                        const username = recipient.substring(1);
+                        const network = MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
+                        const aptosClient = new Aptos(new AptosConfig({
+                            network: Network.CUSTOM,
+                            fullnode: network.fullnode,
+                        }));
+                        
+                        const resolvedAddress = await this.getUserWalletAddress(
+                            username,
+                            aptosClient,
+                            "0xf17f471f57b12eb5a8bd1d722b385b5f1f0606d07b553828c344fb4949fd2a9d"
+                        );
+                        
+                        if (!resolvedAddress) {
+                            return {
+                                response: ERROR_MESSAGES.WALLET_RESOLVE_ERROR,
+                                action: "ERROR"
+                            };
                         }
+                        recipient = resolvedAddress;
                     }
 
                     const nftParams: NFTCreationParams = {

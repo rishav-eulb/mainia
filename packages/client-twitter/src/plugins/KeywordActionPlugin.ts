@@ -379,10 +379,10 @@ export class KeywordActionPlugin {
                     const collectedParams = new Map<string, string>();
                     if(actionHandler.preprocessTweet) {
                         try {
-                            elizaLogger.info("started preproccessing", actionHandler.preprocessTweet);
-                            (await actionHandler.preprocessTweet(tweet, this.runtime)).forEach((key, val) => {
+                            const preprocessDetail =  await actionHandler.preprocessTweet(tweet, this.runtime);
+                            preprocessDetail.forEach((val, key) => {
                                 collectedParams.set(key, val);
-                            })   
+                            })
                         } catch (error) {
                             const errorString = error instanceof Error ? error.message : String(error)
                             elizaLogger.error("error in ", errorString); 
@@ -393,8 +393,7 @@ export class KeywordActionPlugin {
                         }
                     }
 
-                    // Start parameter collection with a natural response
-                    this.pendingActions.set(userId, {
+                    const pendingAction: PendingAction = {
                         actionHandler,
                         collectedParams,
                         lastPromptTime: Date.now(),
@@ -403,8 +402,10 @@ export class KeywordActionPlugin {
                         conversationContext: [`User: ${tweet.text}`],
                         attempts: 0,
                         clarificationCount: 0
-                    });
+                    }
 
+                    // Start parameter collection with a natural response
+                    this.pendingActions.set(userId, pendingAction);
                 }
             }
         }

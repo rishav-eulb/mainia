@@ -27,6 +27,7 @@ export interface TokenFungibleTransferParams {
     recipient: string;      // Recipient address
     amount: string;
     tweetId: string;
+    isVerified: boolean;
 }
 
 
@@ -226,15 +227,6 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
             );
 
             try {
-                // First verify the user has a wallet
-                const userWalletAddress = await this.getUserWalletAddress(params.username, aptosClient, contractAddress);
-                if (!userWalletAddress) {
-                    return {
-                        success: false,
-                        error: "You don't have a wallet registered yet. Please create one first.",
-                        action: "WALLET_REQUIRED"
-                    };
-                }
 
                 let movementTokenparam = {
                     token: "MOVE",
@@ -248,9 +240,9 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
                 let result;
                 if (params.symbol && (params.symbol == "MOVE" || params.symbol == "move")) {
                     result = await this.tokenTransferPlugin.stage_execute(movementTokenparam);
-                } else if (params.symbol) {
+                } else if (params.symbol && params.isVerified) {
                     result = await this.transferBySymbol(aptosClient, movementAccount, contractAddress, params);
-                } else if (params.tokenAddress) {
+                } else if (params.tokenAddress && !params.isVerified) {
                     result = await this.transferByAddress(aptosClient, movementAccount, contractAddress, params);
                 }
                  else {
@@ -285,6 +277,8 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
                     };
                 }
                 throw error;
+
+                //TODO: Handle the error, error can be insufficient balance (if this is the case, ask user to top up their wallet), or wallet not created (if this is the case, ask user to create a wallet by prompting create a wallet) 
             }
         } catch (error) {
             elizaLogger.error("TokenFungibleTransferPlugin: Error executing transfer:", {
@@ -308,7 +302,9 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
                 "@radhemfeulb69 transfer 100 tokens to @user",
                 "@radhemfeulb69 send 50 TEST to 0x123...",
                 "@radhemfeulb69 can you some USDC to @user",
-                "@radhemfeulb69 send 100 USDC to 0x53..."
+                "@radhemfeulb69 send 100 USDC to 0x53...",
+                "@radhemfeulb69 send some tokens to 0x53...",
+                "@radhemfeulb69 can you please send some tokens to @user",
             ],
             requiredParameters: [
                 {
@@ -327,7 +323,6 @@ Previous conversation context:
 
 # Instructions:
 1. Extract the value for the specified parameter
-2. Consider both explicit and implicit mentions in the context
 3. Consider common variations and synonyms
 4. Return your response in this JSON format:
 {
@@ -349,7 +344,7 @@ Only respond with the JSON, no other text.`,
                     extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
 
 Parameter to extract: recipient
-Parameter description: Either a Twitter username (starting with @) or a wallet address (starting with 0x).
+Parameter description: Either a Twitter username (starting with @, don't confuse it with @radhemfeulb69) or a wallet address (starting with 0x, please don't confuse it with token owner address).
 
 User's message:
 {{userMessage}}
@@ -359,7 +354,7 @@ Previous conversation context:
 
 # Instructions:
 1. Extract the value for the specified parameter
-2. Consider both explicit and implicit mentions in the context
+2. Consider implicit mentions in the context
 3. Consider common variations and synonyms
 4. Return your response in this JSON format:
 {
@@ -388,221 +383,122 @@ Only respond with the JSON, no other text.`,
                     })
                 );
 
-                // First check if it's a verified token
-                const verifiedCheck = await this.checkVerifiedTokenBalance(
-                    aptosClient,
-                    contractAddress,
-                    tweet.username,
-                    symbol
-                );
-
-                if (verifiedCheck.isVerified) {
-                    // For verified token, ask for amount
-                    return {
-                        response: `How many ${symbol} tokens would you like to transfer? Your current balance is ${verifiedCheck.balance} ${symbol}`,
-                        action: "COLLECT_AMOUNT"
-                    };
-                } else {
-                    // For user-created token, ask for token owner
-                    return {
-                        response: `This appears to be a user-created token. Please provide the Twitter username of the token owner.`,
-                        action: "COLLECT_TOKEN_OWNER"
-                    };
-                }
-            }
-        };
-
-        const collectAmountAction: IKeywordAction = {
-            name: "collect_amount",
-            description: "Collect transfer amount",
-            examples: ["100", "50.5"],
-            requiredParameters: [
-                {
-                    name: "amount",
-                    prompt: "How many tokens would you like to transfer?",
-                    extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
-
-Parameter to extract: amount
-Parameter description: A positive number must be the amount of tokens to transfer. Can include decimals.
-
-User's message:
-{{userMessage}}
-
-Previous conversation context:
-{{conversationContext}}
-
-# Instructions:
-1. Extract the value for the specified parameter
-2. Consider both explicit and implicit mentions in the context
-3. Consider common variations and synonyms
-4. Return your response in this JSON format:
-{
-    "extracted": true/false,
-    "value": "extracted_value or null if not found",
-    "confidence": "HIGH/MEDIUM/LOW",
-    "alternativeValues": ["other", "possible", "interpretations"],
-    "clarificationNeeded": true/false,
-    "suggestedPrompt": "A natural way to ask for clarification if needed",
-    "reasoning": "Brief explanation of the extraction logic"
-}
-
-Only respond with the JSON, no other text.`,
-                    validator: (value: string) => !isNaN(Number(value)) && Number(value) > 0
-                },
-                {
-                    name: "recipient",
-                    prompt: "Who would you like to transfer to? (Twitter handle or wallet address)",
-                    extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
-
-Parameter to extract: recipient
-Parameter description: Either a Twitter username (starting with @) or a wallet address (starting with 0x).
-
-User's message:
-{{userMessage}}
-
-Previous conversation context:
-{{conversationContext}}
-
-# Instructions:
-1. Extract the value for the specified parameter
-2. Consider both explicit and implicit mentions in the context
-3. Consider common variations and synonyms
-4. Return your response in this JSON format:
-{
-    "extracted": true/false,
-    "value": "extracted_value or null if not found",
-    "confidence": "HIGH/MEDIUM/LOW",
-    "alternativeValues": ["other", "possible", "interpretations"],
-    "clarificationNeeded": true/false,
-    "suggestedPrompt": "A natural way to ask for clarification if needed",
-    "reasoning": "Brief explanation of the extraction logic"
-}
-
-Only respond with the JSON, no other text.`,
-                    validator: (value: string) => /^@?[A-Za-z0-9_]{1,15}$/.test(value) || /^0x[0-9a-fA-F]{64}$/.test(value)
-                }
-            ],
-            action: async (tweet: Tweet, runtime: IAgentRuntime, params: Map<string, string>) => {
-                const amount = params.get("amount");
-                const recipient = params.get("recipient");
-                const symbol = params.get("symbol");
-                
-                const transferParams: TokenFungibleTransferParams = {
-                    username: tweet.username,
-                    symbol: symbol,
-                    recipient: recipient,
-                    amount: amount,
-                    tweetId: tweet.id
-                };
-
-                const result = await this.stage_execute(transferParams);
-
-                if (result.success) {
-                    const networkSetting = runtime.getSetting("MOVEMENT_NETWORK") || DEFAULT_NETWORK;
-                    const network = MOVEMENT_NETWORK_CONFIG[networkSetting];
-                    const explorerUrl = `${MOVEMENT_EXPLORER_URL}/${result.transactionId}?network=${network.explorerNetwork}`;
-                    
-                    const displayRecipient = recipient.startsWith("0x") ? recipient : `@${recipient}`;
-                    return {
-                        response: `✅ Transfer successful!\n\nAmount: ${amount} ${symbol}\nTo: ${displayRecipient}\n\nView transaction: ${explorerUrl}`,
-                        data: { transactionId: result.transactionId },
-                        action: "EXECUTE_ACTION"
-                    };
-                } else if (result.action === "WALLET_REQUIRED") {
-                    return {
-                        response: result.error + "\nUse '@radhemfeulb69 create wallet' to create one.",
-                        action: "ERROR"
-                    };
-                } else {
-                    return {
-                        response: result.error || "Transfer failed. Please try again later.",
-                        action: "ERROR"
-                    };
-                }
-            }
-        };
-
-        const collectTokenOwnerAction: IKeywordAction = {
-            name: "collect_token_owner",
-            description: "Collect token owner information",
-            examples: ["@owner"],
-            requiredParameters: [
-                {
-                    name: "token_owner",
-                    prompt: "Please provide the Twitter username of the token owner",
-                    extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
-
-Parameter to extract: token_owner
-Parameter description: A valid Twitter username (starting with @)
-
-User's message:
-{{userMessage}}
-
-Previous conversation context:
-{{conversationContext}}
-
-# Instructions:
-1. Extract the value for the specified parameter
-2. Consider both explicit and implicit mentions in the context
-3. Consider common variations and synonyms
-4. Return your response in this JSON format:
-{
-    "extracted": true/false,
-    "value": "extracted_value or null if not found",
-    "confidence": "HIGH/MEDIUM/LOW",
-    "alternativeValues": ["other", "possible", "interpretations"],
-    "clarificationNeeded": true/false,
-    "suggestedPrompt": "A natural way to ask for clarification if needed",
-    "reasoning": "Brief explanation of the extraction logic"
-}
-
-Only respond with the JSON, no other text.`,
-                    validator: (value: string) => /^@?\w{1,15}$/.test(value)
-                }
-            ],
-            action: async (tweet: Tweet, runtime: IAgentRuntime, params: Map<string, string>) => {
-                const tokenOwner = params.get("token_owner").replace('@', '');
-                const symbol = params.get("symbol").toUpperCase();
-                const contractAddress = "0xf17f471f57b12eb5a8bd1d722b385b5f1f0606d07b553828c344fb4949fd2a9d";
-
-                const network = MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
-                const aptosClient = new Aptos(
-                    new AptosConfig({
-                        network: Network.CUSTOM,
-                        fullnode: network.fullnode,
-                    })
-                );
-
+                // Check if user has a wallet
                 try {
-                    const balance = await this.checkUserCreatedTokenBalance(
+                    const userWalletAddress = await this.getUserWalletAddress(tweet.username, aptosClient, contractAddress);
+                    if (!userWalletAddress) {
+                        return {
+                            response: "You don't have a wallet yet. Reply 'create wallet' to create one.",
+                            action: "PROMPT_REGISTRATION"
+                        };
+                    }
+
+                    // First check if it's a verified token
+                    const verifiedCheck = await this.checkVerifiedTokenBalance(
                         aptosClient,
                         contractAddress,
                         tweet.username,
-                        tokenOwner,
                         symbol
                     );
 
-                    return {
-                        response: `How many ${symbol} tokens would you like to transfer? Your current balance is ${balance} ${symbol}`,
-                        action: "COLLECT_AMOUNT"
-                    };
+                    if (verifiedCheck.isVerified && !params.has("tokenAddress")) {
+                        // For verified token, proceed with transfer
+                        const transferParams: TokenFungibleTransferParams = {
+                            username: tweet.username,
+                            symbol: symbol,
+                            recipient: params.get("recipient"),
+                            amount: params.get("amount"),
+                            tweetId: tweet.id,
+                            isVerified: true
+                        };
+
+                        const result = await this.stage_execute(transferParams);
+
+                        if (result.success) {
+                            const networkSetting = runtime.getSetting("MOVEMENT_NETWORK") || DEFAULT_NETWORK;
+                            const network = MOVEMENT_NETWORK_CONFIG[networkSetting];
+                            const explorerUrl = `${MOVEMENT_EXPLORER_URL}/${result.transactionId}?network=${network.explorerNetwork}`;
+                            
+                            return {
+                                response: `✅ Transfer successful!\n\nAmount: ${params.get("amount")} ${symbol}\nTo: ${params.get("recipient")}\n\nView transaction: ${explorerUrl}`,
+                                action: "TRANSFER_SUCCESSFUL"
+                            };
+                        } else if (result.action === "WALLET_REQUIRED") {
+                            return {
+                                response: "You don't have a wallet yet. Reply 'create wallet' to create one.",
+                                action: "PROMPT_REGISTRATION"
+                            };
+                        } else if (result.error?.includes("0x13001")) {
+                            return {
+                                response: `Your ${symbol} balance is insufficient. Please top up your wallet first.`,
+                                action: "INSUFFICIENT_BALANCE"
+                            };
+                        } else {
+                            return {
+                                response: result.error || "Transfer failed. Please try again later.",
+                                action: "TRANSFER_FAILED"
+                            };
+                        }
+                    } else if (!verifiedCheck.isVerified && !params.has("tokenAddress")) {
+                        // Token is not verified, ask for token owner
+                        return {
+                            response: `${symbol} is a user-created token. Please provide the token owner's username (e.g., "transfer ${symbol} from @owner").`,
+                            action: "COLLECT_TOKEN_OWNER"
+                        };
+                    } else if (params.has("tokenAddress") && !verifiedCheck.isVerified) {
+                        // Handle transfer by token address
+                        const transferParams: TokenFungibleTransferParams = {
+                            username: tweet.username,
+                            tokenAddress: params.get("tokenAddress"),
+                            recipient: params.get("recipient"),
+                            amount: params.get("amount"),
+                            tweetId: tweet.id,
+                            isVerified: false
+                        };
+
+                        const result = await this.stage_execute(transferParams);
+
+                        if (result.success) {
+                            const networkSetting = runtime.getSetting("MOVEMENT_NETWORK") || DEFAULT_NETWORK;
+                            const network = MOVEMENT_NETWORK_CONFIG[networkSetting];
+                            const explorerUrl = `${MOVEMENT_EXPLORER_URL}/${result.transactionId}?network=${network.explorerNetwork}`;
+                            
+                            return {
+                                response: `✅ Transfer successful!\n\nAmount: ${params.get("amount")} ${symbol}\nTo: ${params.get("recipient")}\n\nView transaction: ${explorerUrl}`,
+                                action: "TRANSFER_SUCCESSFUL"
+                            };
+                        } else if (result.error?.includes("0x13001")) {
+                            return {
+                                response: `Your ${symbol} balance is insufficient. Please top up your wallet first.`,
+                                action: "INSUFFICIENT_BALANCE"
+                            };
+                        } else {
+                            return {
+                                response: result.error || "Transfer failed. Please try again later.",
+                                action: "TRANSFER_FAILED"
+                            };
+                        }
+                    }
                 } catch (error) {
                     if (error.message?.includes("0x51001")) {
                         return {
-                            response: "Token owner not found. Please check the username and try again.",
-                            action: "ERROR"
+                            response: "You don't have a wallet yet. Reply 'create wallet' to create one.",
+                            action: "PROMPT_REGISTRATION"
                         };
                     }
                     return {
-                        response: "An error occurred while checking the token balance. Please try again.",
+                        response: "An error occurred while processing your request. Please try again.",
                         action: "ERROR"
                     };
                 }
+
+                return {
+                    response: "Invalid transfer request. Please try again with correct parameters.",
+                    action: "ERROR"
+                };
             }
         };
 
         this.registerAction(transferTokenAction);
-        this.registerAction(collectAmountAction);
-        this.registerAction(collectTokenOwnerAction);
     }
 } 

@@ -108,13 +108,6 @@ export class TokenTransferPlugin implements IKeywordPlugin {
                 ),
             });
 
-            aptosClient = new Aptos(
-                new AptosConfig({
-                    network: Network.CUSTOM,
-                    fullnode: network.fullnode,
-                })
-            );
-
             // First try to get user's wallet address
             try {
                 const userWalletAddress = await this.getUserWalletAddress(params.username, aptosClient, contractAddress);
@@ -272,22 +265,22 @@ export class TokenTransferPlugin implements IKeywordPlugin {
 
     private registerActions() {
         const transferAction: IKeywordAction = {
-            name: "transfer_move",
-            description: "Transfer tokens to another address",
+            name: "move_transfer",
+            description: "Transfer MOVE tokens to another user",
             examples: [
-                "@movebot transfer 100 MOVE to @user",
-                "@movebot send 50 MOVE to 0x123...",
-                "@movebot transfer 200 MOVE tokens to @username",
-                "@movebot send MOVE tokens to 0x456..."
+                "@radhemfeulb69 transfer 100 MOVE to @user",
+                "@radhemfeulb69 send 50 MOVE to @recipient",
+                "@radhemfeulb69 transfer 200 MOVE tokens to @username",
+                "@radhemfeulb69 send MOVE tokens to @user"
             ],
             requiredParameters: [
                 {
                     name: "amount",
-                    prompt: "How many tokens would you like to transfer?",
+                    prompt: "How many MOVE tokens would you like to transfer?",
                     extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
 
 Parameter to extract: amount
-Parameter description: A positive number representing the amount of tokens to transfer. Can include decimals.
+Parameter description: A positive number representing the amount of MOVE tokens to transfer. Can include decimals.
 
 User's message:
 {{userMessage}}
@@ -297,9 +290,8 @@ Previous conversation context:
 
 # Instructions:
 1. Extract the value for the specified parameter
-2. Consider both explicit and implicit mentions in the context
-3. Consider common variations and synonyms
-4. Return your response in this JSON format:
+2. Consider implicit mentions in the context
+3. Return your response in this JSON format:
 {
     "extracted": true/false,
     "value": "extracted_value or null if not found",
@@ -318,11 +310,11 @@ Only respond with the JSON, no other text.`,
                 },
                 {
                     name: "recipient",
-                    prompt: "Please provide either the recipient's Twitter username (e.g., @user) or wallet address (starting with 0x)",
+                    prompt: "Who would you like to send the MOVE tokens to? (Please provide their Twitter username)",
                     extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
 
 Parameter to extract: recipient
-Parameter description: Either a Twitter username (starting with @) or a wallet address (starting with 0x).
+Parameter description: Twitter username (starting with @) of the recipient, make sure it is not @radhemfeulb69.
 
 User's message:
 {{userMessage}}
@@ -332,9 +324,8 @@ Previous conversation context:
 
 # Instructions:
 1. Extract the value for the specified parameter
-2. Consider both explicit and implicit mentions in the context
-3. Consider common variations and synonyms
-4. Return your response in this JSON format:
+2. Consider implicit mentions in the context
+3. Return your response in this JSON format:
 {
     "extracted": true/false,
     "value": "extracted_value or null if not found",
@@ -346,81 +337,101 @@ Previous conversation context:
 }
 
 Only respond with the JSON, no other text.`,
-                    validator: (value: string) => {
-                        return /^@?[A-Za-z0-9_]{1,15}$/.test(value) || /^0x[0-9a-fA-F]{64}$/.test(value);
-                    }
+                    validator: (value: string) => /^@?[A-Za-z0-9_]{1,15}$/.test(value)
                 }
             ],
             action: async (tweet: Tweet, runtime: IAgentRuntime, params: Map<string, string>) => {
-                elizaLogger.info("TokenTransferPlugin: Processing transfer with params:", Object.fromEntries(params));
-                
-                const amount = params.get("amount");
-                let recipient = params.get("recipient");
-                const tweetId = tweet.id;
+                elizaLogger.info("TokenTransferPlugin: Processing transfer request for user:", tweet.username);
 
-                // Handle recipient resolution
-                let recipientAddress = recipient;
-                if (recipient.startsWith("@")) {
-                    recipient = recipient.substring(1); // Remove @ symbol
+                // First, validate and collect all required parameters
+                const amount = params.get("amount");
+                if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+                    return {
+                        response: "Please provide a valid positive number for the amount to transfer.",
+                        action: "INVALID_AMOUNT"
+                    };
                 }
-                
-                if (!/^0x[0-9a-fA-F]{64}$/.test(recipient)) {
-                    // If not a wallet address, treat as username and resolve address
-                    try {
-                        const contractAddress = "0xf17f471f57b12eb5a8bd1d722b385b5f1f0606d07b553828c344fb4949fd2a9d";
-                        const network = MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
-                        const aptosClient = new Aptos(
-                            new AptosConfig({
-                                network: Network.CUSTOM,
-                                fullnode: network.fullnode,
-                            })
-                        );
-                        
-                        const resolvedAddress = await this.getUserWalletAddress(recipient, aptosClient, contractAddress);
-                        if (!resolvedAddress) {
-                            return {
-                                response: `Could not find a wallet address for user @${recipient}. Please provide a valid username or wallet address.`,
-                                action: "ERROR"
-                            };
-                        }
-                        recipientAddress = resolvedAddress;
-                    } catch (error) {
+
+                let recipient = params.get("recipient");
+                if (!recipient) {
+                    return {
+                        response: "Please provide the recipient's Twitter username.",
+                        action: "NEED_RECIPIENT"
+                    };
+                }
+
+                // Remove @ if present
+                if (recipient.startsWith("@")) {
+                    recipient = recipient.substring(1);
+                }
+
+                // Verify recipient exists and has a wallet
+                try {
+                    const contractAddress = "0xf17f471f57b12eb5a8bd1d722b385b5f1f0606d07b553828c344fb4949fd2a9d";
+                    const network = MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
+                    const aptosClient = new Aptos(
+                        new AptosConfig({
+                            network: Network.CUSTOM,
+                            fullnode: network.fullnode,
+                        })
+                    );
+
+                    const recipientAddress = await this.getUserWalletAddress(recipient, aptosClient, contractAddress);
+                    if (!recipientAddress) {
                         return {
-                            response: `Error resolving wallet address for @${recipient}: ${error.message}`,
-                            action: "ERROR"
+                            response: `@${recipient} doesn't have a wallet yet. They need to create one first by replying 'create wallet'.`,
+                            action: "RECIPIENT_NO_WALLET"
                         };
                     }
-                }
 
-                const transferParams: TokenTransferParams = {
-                    username: tweet.username,
-                    token: "MOVE",  // Default token is MOVE
-                    amount,
-                    recipient: recipientAddress,
-                    tweetId: tweetId
-                };
-
-                const result = await this.stage_execute(transferParams);
-
-                if (result.success) {
-                    const networkSetting = runtime.getSetting("MOVEMENT_NETWORK") || DEFAULT_NETWORK;
-                    const network = MOVEMENT_NETWORK_CONFIG[networkSetting] || MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
-                    const explorerUrl = `${MOVEMENT_EXPLORER_URL}/${result.transactionId}?network=${network.explorerNetwork}`;
-                    
-                    const displayRecipient = recipient.startsWith("0x") ? recipient : `@${recipient}`;
-                    return {
-                        response: `✅ Transfer successful!\n\nAmount: ${amount} MOVE\nTo: ${displayRecipient}\n\nView transaction: ${explorerUrl}`,
-                        data: { transactionId: result.transactionId },
-                        action: "EXECUTE_ACTION"
+                    // Now that we have all parameters and validations, prepare transfer params
+                    const transferParams: TokenTransferParams = {
+                        username: tweet.username,
+                        token: "MOVE",
+                        amount,
+                        recipient: recipientAddress,
+                        tweetId: tweet.id
                     };
-                } else if (result.action === "WALLET_REQUIRED") {
+
+                    // Execute the transfer
+                    const result = await this.stage_execute(transferParams);
+
+                    if (result.success) {
+                        const networkSetting = runtime.getSetting("MOVEMENT_NETWORK") || DEFAULT_NETWORK;
+                        const network = MOVEMENT_NETWORK_CONFIG[networkSetting];
+                        const explorerUrl = `${MOVEMENT_EXPLORER_URL}/${result.transactionId}?network=${network.explorerNetwork}`;
+
+                        return {
+                            response: `✅ Transfer successful!\n\nAmount: ${amount} MOVE\nTo: @${recipient}\n\nView transaction: ${explorerUrl}`,
+                            data: { transactionId: result.transactionId },
+                            action: "TRANSFER_SUCCESSFUL"
+                        };
+                    } else if (result.action === "WALLET_REQUIRED") {
+                        return {
+                            response: "You don't have a wallet yet. Reply 'create wallet' to create one.",
+                            action: "PROMPT_REGISTRATION"
+                        };
+                    } else if (result.error?.includes("0x13001")) {
+                        return {
+                            response: `Insufficient balance. To complete this transfer:\n\n1. Top up your custodial wallet:\n${result.userWalletAddress}\n\n2. Try the transfer again after topping up.`,
+                            action: "INSUFFICIENT_BALANCE"
+                        };
+                    } else {
+                        return {
+                            response: result.error || "Transfer failed. Please try again later.",
+                            action: "TRANSFER_FAILED"
+                        };
+                    }
+                } catch (error) {
+                    elizaLogger.error("Error processing transfer:", error);
+                    if (error.message?.includes("0x51001")) {
+                        return {
+                            response: "You don't have a wallet yet. Reply 'create wallet' to create one.",
+                            action: "PROMPT_REGISTRATION"
+                        };
+                    }
                     return {
-                        response: result.error + "\nUse '@movebot create wallet' to create one.",
-                        action: "ERROR"
-                    };
-                } else {
-                    return {
-                        response: result.error || "Transfer failed. Please try again later.",
+                        response: "An error occurred while processing your transfer. Please try again.",
                         action: "ERROR"
                     };
                 }

@@ -19,6 +19,8 @@ import { MOVEMENT_NETWORK_CONFIG, DEFAULT_NETWORK } from "../constants";
 export interface WalletParams {
     username: string;
     action: 'GET_ADDRESS' | 'GET_BALANCE';
+    symbol?: string;
+    tokenOwnerUsername?: string;
 }
 
 export class WalletManagementPlugin implements IKeywordPlugin {
@@ -76,17 +78,39 @@ export class WalletManagementPlugin implements IKeywordPlugin {
                     functionArguments: [username]
                 }
             });
-            // Convert balance from base units to MOVE tokens (assuming 8 decimals)
             const balanceInBaseUnits = BigInt(result[0] as string);
             const balanceInMove = Number(balanceInBaseUnits) / Math.pow(10, 8);
             return balanceInMove.toString();
         } catch (error) {
-            elizaLogger.error("Error fetching wallet balance:", {
-                error: error instanceof Error ? error.message : String(error),
-                username
-            });
+            elizaLogger.error("Error fetching wallet balance:", error);
             throw error;
         }
+    }
+
+    private async getVerifiedTokenBalance(username: string, aptosClient: Aptos, contractAddress: string, symbol: string): Promise<string> {
+        const result = await aptosClient.view({
+            payload: {
+                function: `${contractAddress}::fa_wallet::wallet_fa_balance_for_verified_token`,
+                typeArguments: [],
+                functionArguments: [username, symbol]
+            }
+        });
+        const balanceInBaseUnits = BigInt(result[0] as string);
+        const balanceInTokens = Number(balanceInBaseUnits) / Math.pow(10, 8);
+        return balanceInTokens.toString();
+    }
+
+    private async getUnverifiedTokenBalance(username: string, aptosClient: Aptos, contractAddress: string, symbol: string, tokenOwnerUsername: string): Promise<string> {
+        const result = await aptosClient.view({
+            payload: {
+                function: `${contractAddress}::fa_wallet::wallet_fa_balance_for_user_created_token`,
+                typeArguments: [],
+                functionArguments: [username, tokenOwnerUsername, symbol]
+            }
+        });
+        const balanceInBaseUnits = BigInt(result[0] as string);
+        const balanceInTokens = Number(balanceInBaseUnits) / Math.pow(10, 8);
+        return balanceInTokens.toString();
     }
 
     private async createUserWallet(username: string, aptosClient: Aptos, movementAccount: Account, contractAddress: string): Promise<boolean> {
@@ -157,34 +181,84 @@ export class WalletManagementPlugin implements IKeywordPlugin {
                 })
             );
 
+            let userWalletAddress = await this.getUserWalletAddress(params.username, aptosClient, contractAddress);
+
+            if(!userWalletAddress) {
+                const success = await this.createUserWallet(params.username, aptosClient, movementAccount, contractAddress);
+                if(success) {
+                    userWalletAddress = await this.getUserWalletAddress(params.username, aptosClient, contractAddress);
+                }
+            }
+
             try {
-                // First try to get user's wallet address
-                const userWalletAddress = await this.getUserWalletAddress(params.username, aptosClient, contractAddress);
                 
-                if (params.action === 'GET_ADDRESS') {
+                if (params.action === 'GET_ADDRESS' ) {
                     return {
                         success: true,
                         address: userWalletAddress,
                         action: "ADDRESS_RETRIEVED"
                     };
                 } else if (params.action === 'GET_BALANCE') {
-                    const balance = await this.getWalletBalance(params.username, aptosClient, contractAddress);
-                    return {
-                        success: true,
-                        balance,
-                        action: "BALANCE_RETRIEVED"
-                    };
+                    if (params.symbol === 'MOVE') {
+                        const balance = await this.getWalletBalance(params.username, aptosClient, contractAddress);
+                        return {
+                            success: true,
+                            balance,
+                            action: "BALANCE_RETRIEVED"
+                        };
+                    } else if (['BTC', 'ETH', 'USDC', 'USDT', 'WETH'].includes(params.symbol)) {
+                        const balance = await this.getVerifiedTokenBalance(params.username, aptosClient, contractAddress, params.symbol);
+                        return {
+                            success: true,
+                            balance,
+                            action: "BALANCE_RETRIEVED"
+                        };
+                    } else if (params.tokenOwnerUsername) {
+                        const balance = await this.getUnverifiedTokenBalance(
+                            params.username,
+                            aptosClient,
+                            contractAddress,
+                            params.symbol,
+                            params.tokenOwnerUsername
+                        );
+                        return {
+                            success: true,
+                            balance,
+                            action: "BALANCE_RETRIEVED"
+                        };
+                    } else {
+                        return {
+                            success: false,
+                            error: "For user-created tokens, please provide the token owner's username",
+                            action: "ERROR"
+                        };
+                    }
                 }
-
-                return {
-                    success: false,
-                    error: "Invalid action specified",
-                    action: "INVALID_ACTION"
-                };
 
             } catch (error) {
                 // Check if error is due to user not being registered (0x51001)
+
+                //TODO do we need this
                 if (error.message?.includes("0x51001")) {
+                    if (params.action === 'GET_ADDRESS') {
+                        // Try to create wallet for address request
+                        const success = await this.createUserWallet(
+                            params.username,
+                            aptosClient,
+                            movementAccount,
+                            contractAddress
+                        );
+                        
+                        if (success) {
+                            const address = await this.getUserWalletAddress(params.username, aptosClient, contractAddress);
+                            return {
+                                success: true,
+                                address,
+                                action: "WALLET_CREATED"
+                            };
+                        }
+                    }
+                    
                     return {
                         success: false,
                         error: "No wallet registered. Would you like to create one?",
@@ -211,45 +285,146 @@ export class WalletManagementPlugin implements IKeywordPlugin {
     private registerActions() {
         const walletAction: IKeywordAction = {
             name: "wallet_management",
-            description: "Manage user's wallet (get address or balance)",
+            description: "Get user's wallet address or token balance",
             examples: [
                 "@radhemfeulb69 what is my wallet address",
                 "@radhemfeulb69 show my wallet address",
-                "@radhemfeulb69 get my wallet balance",
-                "@radhemfeulb69 how much MOVE do I have",
-                "@radhemfeulb69 check my balance",
-                "@radhemfeulb69 create wallet"
+                "@radhemfeulb69 get my MOVE balance",
+                "@radhemfeulb69 how much USDC do I have",
+                "@radhemfeulb69 check my BTC balance",
+                "@radhemfeulb69 show my TEST token balance from @owner"
             ],
-            requiredParameters: [],
-            action: async (tweet: Tweet, runtime: IAgentRuntime) => {
-                elizaLogger.info("WalletManagementPlugin: Processing wallet action for user:", tweet.username);
-                
-                const text = tweet.text.toLowerCase();
-                const action = text.includes('balance') ? 'GET_BALANCE' : 'GET_ADDRESS';
+            requiredParameters: [
+                {
+                    name: "action",
+                    prompt: "Would you like to check your wallet address or token balance?",
+                    extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
 
-                const params: WalletParams = {
+Parameter to extract: action
+Parameter description: Either 'GET_ADDRESS' for wallet address requests or 'GET_BALANCE' for balance checks.
+
+User's message:
+{{userMessage}}
+
+Previous conversation context:
+{{conversationContext}}
+
+# Instructions:
+1. Extract the value for the specified parameter
+2. Consider both explicit and implicit mentions in the context
+3. Return your response in this JSON format:
+{
+    "extracted": true/false,
+    "value": "GET_ADDRESS" or "GET_BALANCE" or null if not found,
+    "confidence": "HIGH/MEDIUM/LOW",
+    "alternativeValues": ["other", "possible", "interpretations"],
+    "clarificationNeeded": true/false,
+    "suggestedPrompt": "A natural way to ask for clarification if needed",
+    "reasoning": "Brief explanation of the extraction logic"
+}
+
+Only respond with the JSON, no other text.`,
+                    validator: (value: string) => ['GET_ADDRESS', 'GET_BALANCE'].includes(value)
+                }
+            ],
+            preprocessTweet: async (tweet: Tweet, runtime: IAgentRuntime) => {
+                const text = tweet.text.toLowerCase();
+                const params = new Map<string, string>();
+
+                // Extract action from text
+                if (text.includes('address') || text.includes('wallet')) {
+                    params.set('action', 'GET_ADDRESS');
+                } else if (text.includes('balance') || text.includes('how much')) {
+                    params.set('action', 'GET_BALANCE');
+
+                    // If it's a balance check, try to extract the token symbol
+                    const tokenMatch = text.match(/\b(move|btc|eth|usdc|usdt|weth|[a-z0-9]{2,10})\b/i);
+                    if (tokenMatch) {
+                        params.set('symbol', tokenMatch[1].toUpperCase());
+                    }
+
+                    // Check for token owner in case of user-created tokens
+                    const ownerMatch = text.match(/from\s+@(\w+)/i);
+                    if (ownerMatch) {
+                        params.set('tokenOwnerUsername', ownerMatch[1]);
+                    }
+                }
+
+                return params;
+            },
+            action: async (tweet: Tweet, runtime: IAgentRuntime, params: Map<string, string>) => {
+                elizaLogger.info("WalletManagementPlugin: Processing request for user:", tweet.username);
+                
+                const action = params.get("action");
+                if (!action) {
+                    return {
+                        response: "Would you like to check your wallet address or token balance?",
+                        action: "NEED_ACTION"
+                    };
+                }
+
+                // Prepare base parameters
+                const walletParams: WalletParams = {
                     username: tweet.username,
-                    action
+                    action: action as 'GET_ADDRESS' | 'GET_BALANCE'
                 };
 
-                const result = await this.stage_execute(params);
+                // If it's a balance check, we need additional parameters
+                if (action === 'GET_BALANCE') {
+                    const symbol = params.get("symbol")?.toUpperCase();
+                    if (!symbol) {
+                        return {
+                            response: "Which token's balance would you like to check? (e.g., MOVE, BTC, ETH, USDC)",
+                            action: "NEED_TOKEN"
+                        };
+                    }
+
+                    walletParams.symbol = symbol;
+
+                    // For non-verified tokens, we need the token owner
+                    if (!['MOVE', 'BTC', 'ETH', 'USDC', 'USDT', 'WETH'].includes(symbol)) {
+                        const tokenOwnerUsername = params.get("tokenOwnerUsername");
+                        if (!tokenOwnerUsername) {
+                            return {
+                                response: `${symbol} appears to be a user-created token. Please provide the token owner's username (e.g., "check my ${symbol} balance from @owner")`,
+                                action: "NEED_TOKEN_OWNER"
+                            };
+                        }
+                        walletParams.tokenOwnerUsername = tokenOwnerUsername;
+                    }
+                }
+
+                // Now that we have all required parameters, call stage_execute
+                const result = await this.stage_execute(walletParams);
 
                 if (result.success) {
-                    if (result.address) {
-                        return {
-                            response: `Your custodial wallet address is:\n${result.address}`,
-                            action: "ADDRESS_RETRIEVED"
-                        };
-                                        } else if (result.balance) {
+                    if (action === 'GET_ADDRESS') {
+                        if (result.action === "WALLET_CREATED") {
                             return {
-                                response: `Your wallet balance is: ${result.balance} MOVE`,
-                                action: "BALANCE_RETRIEVED"
+                                response: `✅ Wallet created successfully!\n\nYour custodial wallet address is:\n${result.address}`,
+                                action: "WALLET_CREATED"
                             };
+                        } else {
+                            return {
+                                response: `Your custodial wallet address is:\n${result.address}`,
+                                action: "ADDRESS_RETRIEVED"
+                            };
+                        }
+                    } else { // GET_BALANCE
+                        return {
+                            response: `Your ${walletParams.symbol} balance is: ${result.balance} ${walletParams.symbol}`,
+                            action: "BALANCE_RETRIEVED"
+                        };
                     }
                 } else if (result.needsRegistration) {
                     return {
-                        response: "You don't have a wallet registered yet. Reply 'yes' if you'd like to create one.",
+                        response: "You don't have a wallet yet. Reply 'create wallet' to create one.",
                         action: "PROMPT_REGISTRATION"
+                    };
+                } else if (result.action === "NEED_TOKEN_OWNER") {
+                    return {
+                        response: `${walletParams.symbol} is a user-created token. Please provide the token owner's username (e.g., "check my ${walletParams.symbol} balance from @owner")`,
+                        action: "NEED_TOKEN_OWNER"
                     };
                 } else {
                     return {
@@ -257,87 +432,9 @@ export class WalletManagementPlugin implements IKeywordPlugin {
                         action: "ERROR"
                     };
                 }
-
-                return {
-                    response: "Unable to process your request.",
-                    action: "ERROR"
-                };
-            }
-        };
-
-        const registrationAction: IKeywordAction = {
-            name: "wallet_registration",
-            description: "Handle wallet registration confirmation",
-            examples: [
-                "@radhemfeulb69 yes",
-                "@radhemfeulb69 yes create wallet",
-                "@radhemfeulb69 yes please",
-                "@radhemfeulb69 create wallet"
-            ],
-            requiredParameters: [],
-            action: async (tweet: Tweet, runtime: IAgentRuntime) => {
-                elizaLogger.info("WalletManagementPlugin: Processing registration for user:", tweet.username);
-                
-                try {
-                    const privateKey = this.runtime.getSetting("MOVEMENT_PRIVATE_KEY");
-                    if (!privateKey) {
-                        throw new Error("Missing MOVEMENT_PRIVATE_KEY configuration");
-                    }
-
-                    const network = MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
-                    if (!network) {
-                        throw new Error("Missing MOVEMENT_NETWORK configuration");
-                    }
-
-                    const contractAddress = "0xf17f471f57b12eb5a8bd1d722b385b5f1f0606d07b553828c344fb4949fd2a9d";
-
-                    const movementAccount = Account.fromPrivateKey({
-                        privateKey: new Ed25519PrivateKey(
-                            PrivateKey.formatPrivateKey(
-                                privateKey,
-                                PrivateKeyVariants.Ed25519
-                            )
-                        ),
-                    });
-
-                    const aptosClient = new Aptos(
-                        new AptosConfig({
-                            network: Network.CUSTOM,
-                            fullnode: network.fullnode,
-                        })
-                    );
-
-                    const success = await this.createUserWallet(
-                        tweet.username,
-                        aptosClient,
-                        movementAccount,
-                        contractAddress
-                    );
-
-                    if (success) {
-                        // Get the newly created wallet address
-                        const address = await this.getUserWalletAddress(tweet.username, aptosClient, contractAddress);
-                        return {
-                            response: `✅ Wallet created successfully!\n\nYour custodial wallet address is:\n${address}\n\nYou can now top up this wallet to start using MOVE tokens.`,
-                            action: "WALLET_CREATED"
-                        };
-                    } else {
-                        return {
-                            response: "Failed to create wallet. Please try again later.",
-                            action: "WALLET_CREATION_FAILED"
-                        };
-                    }
-                } catch (error) {
-                    elizaLogger.error("Error in wallet registration:", error);
-                    return {
-                        response: "An error occurred while creating your wallet. Please try again later.",
-                        action: "ERROR"
-                    };
-                }
             }
         };
 
         this.registerAction(walletAction);
-        this.registerAction(registrationAction);
     }
 } 
