@@ -170,7 +170,6 @@ export class ClientBase extends EventEmitter {
             isReply: raw.isReply,
             isRetweet: raw.legacy?.retweeted === true,
             isSelfThread: raw.isSelfThread,
-            language: raw.legacy?.lang,
             likes: raw.legacy?.favorite_count ?? 0,
             name:
                 raw.name ??
@@ -197,7 +196,6 @@ export class ClientBase extends EventEmitter {
             quotedStatus,
             quotedStatusId:
                 raw.quotedStatusId ?? raw.legacy?.quoted_status_id_str ?? undefined,
-            quotes: raw.legacy?.quote_count ?? 0,
             replies: raw.legacy?.reply_count ?? 0,
             retweets: raw.legacy?.retweet_count ?? 0,
             retweetedStatus,
@@ -358,34 +356,110 @@ export class ClientBase extends EventEmitter {
             ? await this.twitterClient.fetchFollowingTimeline(count, [])
             : await this.twitterClient.fetchHomeTimeline(count, []);
 
-        elizaLogger.debug(homeTimeline, { depth: Number.POSITIVE_INFINITY });
-        const processedTimeline = homeTimeline
-            .filter((t) => t.__typename !== "TweetWithVisibilityResults") // what's this about?
-            .map((tweet) => this.parseTweet(tweet));
-
-        //elizaLogger.debug("process homeTimeline", processedTimeline);
-        return processedTimeline;
+       
+        elizaLogger.debug("process homeTimeline", homeTimeline);
+        return homeTimeline;
     }
 
     async fetchTimelineForActions(count: number): Promise<Tweet[]> {
-        elizaLogger.debug("fetching timeline for actions");
+        const MAX_RETRIES = 3;
+        const RETRY_DELAY = 2000; // 2 seconds
+        const TIMEOUT = 15000; // 15 seconds
 
-        const agentUsername = this.twitterConfig.TWITTER_USERNAME;
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                elizaLogger.debug(`Fetching timeline for actions (attempt ${attempt}/${MAX_RETRIES})`);
 
-        const homeTimeline =
-            this.twitterConfig.ACTION_TIMELINE_TYPE ===
-            ActionTimelineType.Following
-                ? await this.twitterClient.fetchFollowingTimeline(count, [])
-                : await this.twitterClient.fetchHomeTimeline(count, []);
+                // Check if we're logged in before making the request
+                if (!(await this.twitterClient.isLoggedIn())) {
+                    elizaLogger.warn("Twitter client not logged in, attempting to refresh login");
+                    const username = this.twitterConfig.TWITTER_USERNAME;
+                    const password = this.twitterConfig.TWITTER_PASSWORD;
+                    const email = this.twitterConfig.TWITTER_EMAIL;
+                    const twitter2faSecret = this.twitterConfig.TWITTER_2FA_SECRET;
+                    
+                    await this.twitterClient.login(username, password, email, twitter2faSecret);
+                    
+                    if (!(await this.twitterClient.isLoggedIn())) {
+                        throw new Error("Failed to refresh Twitter login");
+                    }
+                    
+                    // Cache new cookies after successful login
+                    await this.cacheCookies(username, await this.twitterClient.getCookies());
+                }
 
-        // Parse, filter out self-tweets, limit to count
-        return homeTimeline
-            .map((tweet) => this.parseTweet(tweet))
-            .filter((tweet) => tweet.username !== agentUsername) // do not perform action on self-tweets
-            .slice(0, count);
-        // TODO: Once the 'count' parameter is fixed in the 'fetchTimeline' method of the 'agent-twitter-client',
-        // this workaround can be removed.
-        // Related issue: https://github.com/elizaos/agent-twitter-client/issues/43
+                const agentUsername = this.twitterConfig.TWITTER_USERNAME;
+                if (!agentUsername) {
+                    elizaLogger.error("Twitter username not configured");
+                    return [];
+                }
+
+                // Create a timeout promise
+                const timeoutPromise = new Promise((_, reject) => {
+                    setTimeout(() => reject(new Error('Timeline fetch timeout')), TIMEOUT);
+                });
+
+                // Fetch timeline with timeout
+                const homeTimeline = await Promise.race([
+                    this.twitterConfig.ACTION_TIMELINE_TYPE === ActionTimelineType.Following
+                        ? this.twitterClient.fetchFollowingTimeline(count, [])
+                        : this.twitterClient.fetchHomeTimeline(count, []),
+                    timeoutPromise
+                ]);
+
+                if (!homeTimeline || !Array.isArray(homeTimeline)) {
+                    throw new Error(`Invalid timeline response: ${JSON.stringify(homeTimeline)}`);
+                }
+
+                if (homeTimeline.length === 0) {
+                    elizaLogger.warn("Timeline is empty");
+                    return [];
+                }
+
+                // Parse and validate tweets
+                const validTweets = homeTimeline
+                    .map(tweet => {
+                        try {
+                            return this.parseTweet(tweet);
+                        } catch (error) {
+                            elizaLogger.error("Error parsing tweet:", error);
+                            return null;
+                        }
+                    })
+                    .filter((tweet): tweet is Tweet => {
+                        if (!tweet || !tweet.userId || !tweet.id) {
+                            elizaLogger.warn("Invalid tweet object filtered out:", tweet);
+                            return false;
+                        }
+                        return tweet.username !== agentUsername;
+                    })
+                    .slice(0, count);
+
+                elizaLogger.debug(`Fetched ${validTweets.length} valid tweets for actions`);
+                return validTweets;
+
+            } catch (error) {
+                const isLastAttempt = attempt === MAX_RETRIES;
+                elizaLogger.error(`Error in fetchTimelineForActions (attempt ${attempt}/${MAX_RETRIES}):`, {
+                    error: error.message,
+                    response: error.response,
+                    stack: error.stack
+                });
+
+                if (error.message?.includes('429')) {
+                    elizaLogger.warn("Rate limit hit, waiting longer before retry");
+                    await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * 2));
+                } else if (isLastAttempt) {
+                    elizaLogger.error("Max retries reached, giving up");
+                    return [];
+                }
+
+                // Wait before retrying
+                await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+            }
+        }
+
+        return [];
     }
 
     async fetchSearchTweets(
@@ -708,7 +782,7 @@ export class ClientBase extends EventEmitter {
     async loadLatestCheckedTweetId(): Promise<void> {
         const latestCheckedTweetId =
             await this.runtime.cacheManager.get<string>(
-                `twitter/${this.profile.username}/latest_checked_tweet_id`
+                `twitter/${this.twitterConfig.TWITTER_USERNAME}/latest_checked_tweet_id`
             );
 
         if (latestCheckedTweetId) {
@@ -719,7 +793,7 @@ export class ClientBase extends EventEmitter {
     async cacheLatestCheckedTweetId() {
         if (this.lastCheckedTweetId) {
             await this.runtime.cacheManager.set(
-                `twitter/${this.profile.username}/latest_checked_tweet_id`,
+                `twitter/${this.twitterConfig.TWITTER_USERNAME}/latest_checked_tweet_id`,
                 this.lastCheckedTweetId.toString()
             );
         }
@@ -727,15 +801,14 @@ export class ClientBase extends EventEmitter {
 
     async getCachedTimeline(): Promise<Tweet[] | undefined> {
         return await this.runtime.cacheManager.get<Tweet[]>(
-            `twitter/${this.profile.username}/timeline`
+            `twitter/${this.twitterConfig.TWITTER_USERNAME}/timeline`
         );
     }
 
     async cacheTimeline(timeline: Tweet[]) {
         await this.runtime.cacheManager.set(
-            `twitter/${this.profile.username}/timeline`,
-            timeline,
-            { expires: Date.now() + 10 * 1000 }
+            `twitter/${this.twitterConfig.TWITTER_USERNAME}/timeline`,
+            timeline
         );
     }
 
@@ -747,17 +820,36 @@ export class ClientBase extends EventEmitter {
         );
     }
 
-    async getCachedCookies(username: string) {
-        return await this.runtime.cacheManager.get<any[]>(
-            `twitter/${username}/cookies`
+    async cacheCookies(username: string, cookies: any[]) {
+        // Add expiration time for cookies - 6 hours from now
+        const expirationTime = Date.now() + (6 * 60 * 60 * 1000);
+        await this.runtime.cacheManager.set(
+            `twitter/${username}/cookies`,
+            {
+                cookies,
+                expirationTime
+            }
         );
     }
 
-    async cacheCookies(username: string, cookies: any[]) {
-        await this.runtime.cacheManager.set(
-            `twitter/${username}/cookies`,
-            cookies
-        );
+    async getCachedCookies(username: string) {
+        const cachedData = await this.runtime.cacheManager.get<{
+            cookies: any[],
+            expirationTime: number
+        }>(`twitter/${username}/cookies`);
+
+        if (!cachedData) {
+            return null;
+        }
+
+        // Check if cookies are still valid
+        if (Date.now() > cachedData.expirationTime) {
+            elizaLogger.info("Cached cookies have expired");
+            await this.runtime.cacheManager.delete(`twitter/${username}/cookies`);
+            return null;
+        }
+
+        return cachedData.cookies;
     }
 
     async fetchProfile(username: string): Promise<TwitterProfile> {

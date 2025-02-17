@@ -1,0 +1,26 @@
+{
+    "name": "@elizaos/plugin-aptos-events",
+    "version": "0.1.0",
+    "description": "Aptos events plugin for Eliza",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "scripts": {
+        "build": "tsc",
+        "clean": "rimraf dist",
+        "dev": "tsc -w",
+        "lint": "eslint src --ext .ts",
+        "test": "jest"
+    },
+    "dependencies": {
+        "@aptos-labs/ts-sdk": "^1.5.1",
+        "@elizaos/core": "workspace:*"
+    },
+    "devDependencies": {
+        "@types/node": "^20.0.0",
+        "typescript": "^5.0.0",
+        "rimraf": "^3.0.2",
+        "eslint": "^8.0.0",
+        "@typescript-eslint/parser": "^5.0.0",
+        "@typescript-eslint/eslint-plugin": "^5.0.0"
+    }
+} 

@@ -6,6 +6,7 @@ import { TwitterPostClient } from "./post.ts";
 import { TwitterSearchClient } from "./search.ts";
 import { TwitterSpaceClient } from "./spaces.ts";
 import { TwitterKeywordService } from "./plugins/TwitterKeywordService";
+import { MovebotService } from "./plugins/MovebotService";
 
 /**
  * A manager that orchestrates all specialized Twitter logic:
@@ -23,6 +24,7 @@ class TwitterManager implements Client {
     interaction: TwitterInteractionClient;
     space?: TwitterSpaceClient;
     keywordService?: TwitterKeywordService;
+    movebotService?: MovebotService;
 
     constructor(runtime: IAgentRuntime, twitterConfig: TwitterConfig) {
         // Pass twitterConfig to the base client
@@ -54,6 +56,12 @@ class TwitterManager implements Client {
             elizaLogger.log("Initializing Twitter keyword service");
             this.keywordService = new TwitterKeywordService(this.client, runtime);
         }
+
+        // Optional movebot service (enabled if TWITTER_MOVEBOT_ENABLE is true)
+        if (twitterConfig.TWITTER_MOVEBOT_ENABLE) {
+            elizaLogger.log("Initializing Movebot service");
+            this.movebotService = new MovebotService(this.client, runtime);
+        }
     }
 
     async start() {
@@ -65,9 +73,9 @@ class TwitterManager implements Client {
         //     await this.search.start();
         // }
 
-        // // Start the interaction client
-        // await this.interaction.start();
-
+        // Start the interaction client
+       // await this.interaction.start();
+       
         // // Start the space client if enabled
         // if (this.space) {
         //     await this.space.startPeriodicSpaceCheck();
@@ -77,12 +85,23 @@ class TwitterManager implements Client {
         if (this.keywordService) {
             await this.keywordService.start();
         }
+
+        // Start the movebot service if enabled
+        if (this.movebotService) {
+            await this.movebotService.start();
+        }
     }
 
     async stop() {
         // Stop the space client if enabled
         if (this.space) {
             this.space.stopPeriodicCheck();
+        }
+
+        // Stop the movebot service if enabled
+        if (this.movebotService) {
+            await this.movebotService.stop();
+            elizaLogger.log("Movebot service stopped");
         }
 
         elizaLogger.log("Twitter client stopped");
@@ -101,3 +120,4 @@ export async function createTwitterClient(
 export * from "./environment.ts";
 export * from "./plugins/KeywordActionPlugin";
 export * from "./plugins/TwitterKeywordService";
+export * from "./plugins/MovebotService";
