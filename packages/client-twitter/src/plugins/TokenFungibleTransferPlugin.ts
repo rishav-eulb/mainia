@@ -177,7 +177,6 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
                 typeArguments: [],
                 functionArguments: [
                     params.username,                                   // tuser_id
-                    params.tokenAddress,                               // token_address,
                     params.tokenCreator, // token creator twitter handle
                     params.symbol, // token symbol
                     new AccountAddress(this.hexStringToUint8Array(params.recipient)),  // to (as AccountAddress)
@@ -320,10 +319,26 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
                         action: "WALLET_REQUIRED"
                     };
                 }
-                throw error;
+                if (error.message?.includes("0x55004")) {
+                    return {
+                        success: false,
+                        error: "You don't have ownership rights.",
+                        action: "TOKEN_OWNERSHIP_NOT_FOUND"
+                    };
+                }
 
+                if (error.message?.includes("0x65003")) {
+                    return {
+                        success: false,
+                        error: "This token does not exist.",
+                        action: "TOKEN_NOT_FOUND"
+                    };
+                }
+
+                throw error;
                 //TODO: Handle the error, error can be insufficient balance (if this is the case, ask user to top up their wallet), or wallet not created (if this is the case, ask user to create a wallet by prompting create a wallet) 
             }
+            
         } catch (error) {
             elizaLogger.error("TokenFungibleTransferPlugin: Error executing transfer:", {
                 error: error instanceof Error ? error.message : String(error),
@@ -351,6 +366,40 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
                 "@radhemfeulb69 can you please send some tokens to @user",
             ],
             requiredParameters: [
+                {
+                    name: "amount",
+                    prompt: "How many tokens would you like to transfer?",
+                    extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
+
+Parameter to extract: amount
+Parameter description: A positive number representing the amount of tokens to transfer. Can include decimals.
+
+User's message:
+{{userMessage}}
+
+Previous conversation context:
+{{conversationContext}}
+
+# Instructions:
+1. Extract the value for the specified parameter
+2. Consider implicit mentions in the context
+3. Return your response in this JSON format:
+{
+    "extracted": true/false,
+    "value": "extracted_value or null if not found",
+    "confidence": "HIGH/MEDIUM/LOW",
+    "alternativeValues": ["other", "possible", "interpretations"],
+    "clarificationNeeded": true/false,
+    "suggestedPrompt": "A natural way to ask for clarification if needed",
+    "reasoning": "Brief explanation of the extraction logic"
+}
+
+Only respond with the JSON, no other text.`,
+                    validator: (value: string) => {
+                        const num = Number(value);
+                        return !isNaN(num) && num > 0;
+                    }
+                },
                 {
                     name: "symbol",
                     prompt: "What token would you like to transfer?",
@@ -405,13 +454,15 @@ Only respond with the JSON, no other text.`,
                             contractAddress,
                             symbol
                         );
-
+                        
+                        elizaLogger.info("TokenFungibleTransferPlugin: Verified check:", verifiedCheck);
                         if(verifiedCheck.isVerified) {
                             return {
                                 isValidated: true
                             }
                         }
                         
+                        elizaLogger.info("TokenFungibleTransferPlugin: Optional Check:", verifiedCheck);
                         return {
                             isValidated: true,
                             optionalParameterName: "tokenOwner",
@@ -456,15 +507,39 @@ Only respond with the JSON, no other text.`,
                 {
                     name: "tokenOwner",
                     prompt: "Please provide either the token owner's Twitter username (e.g., @user)",
-                    extractorTemplate: `
-                    
+                    extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
 
-`,
+Parameter to extract: tokenOwner
+Parameter description: Either a Twitter username (starting with @, don't confuse it with @radhemfeulb69 or recipient name ) or a wallet address (starting with 0x, please don't confuse it with recipient address).
+
+User's message:
+{{userMessage}}
+
+Previous conversation context:
+{{conversationContext}}
+
+
+# Instructions:
+1. Extract the value for the specified parameter
+2. Consider implicit mentions in the context
+3. Consider common variations and synonyms
+4. Return your response in this JSON format:
+{
+    "extracted": true/false,
+    "value": "extracted_value or null if not found",
+    "confidence": "HIGH/MEDIUM/LOW",
+    "alternativeValues": ["other", "possible", "interpretations"],
+    "clarificationNeeded": true/false,
+    "suggestedPrompt": "A natural way to ask for clarification if needed",
+    "reasoning": "Brief explanation of the extraction logic"
+}
+
+Only respond with the JSON, no other text.`,
                     validator: (value: string) => /^@?[A-Za-z0-9_]{1,15}$/.test(value) || /^0x[0-9a-fA-F]{64}$/.test(value)
                 }
             ],
             action: async (tweet: Tweet, runtime: IAgentRuntime, params: Map<string, string>) => {
-                const symbol = params.get("symbol").toUpperCase();
+                const symbol = params.get("symbol").toUpperCase().replace("$", "");
                 const contractAddress = "0xf17f471f57b12eb5a8bd1d722b385b5f1f0606d07b553828c344fb4949fd2a9d";
                 
                 const network = MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
@@ -598,7 +673,8 @@ Only respond with the JSON, no other text.`,
                         // Handle transfer by token address
                         const transferParams: TokenFungibleTransferParams = {
                             username: tweet.username,
-                            tokenCreator: params.get("tokenOwner"),
+                            tokenCreator: params.get("tokenOwner").replace("@", ""),
+                            symbol: symbol,
                             recipient,
                             amount: params.get("amount"),
                             tweetId: tweet.id,

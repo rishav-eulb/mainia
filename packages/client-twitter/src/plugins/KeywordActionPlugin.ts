@@ -354,9 +354,8 @@ export class KeywordActionPlugin {
         needsOptionalParam: boolean;
     }>{
         let promptRequest: ValidationPromptRequest;
-
         if ((extraction?.extracted || extraction?.optional) && extraction?.confidence !== 'LOW') {
-            if (!paramReq.validator || await paramReq.validator(extraction.value, this.runtime)) {
+            if (paramReq.validator && await paramReq.validator(extraction.value, this.runtime)) {
                 elizaLogger.info("KeywordActionPlugin: Extraction validation:", {
                     extraction,
                     key: paramReq.name
@@ -535,6 +534,7 @@ export class KeywordActionPlugin {
                 });
 
                 const validationResult = await this.validateExtraction(extraction, paramReq, pendingAction);
+                elizaLogger.info("KeywordActionPlugin: Optional Validation result:", validationResult);
 
                 // If value is not set or optional parameter is required then throw a prompt.
                 if (!validationResult.valueSet || validationResult.needsOptionalParam) {
@@ -549,11 +549,13 @@ export class KeywordActionPlugin {
                     !pendingAction.collectedParams.has(req.name)
                 )
 
+                elizaLogger.info("KeywordActionPlugin: Next parameter requirement:", nextParamReq);
+
                 // If optional value has been extracted. Then throw prompt for next required parameter.
                 if (nextParamReq) {
                     return {
                         hasAction: true,
-                        response: paramReq.prompt,
+                        response: nextParamReq.prompt,
                         needsMoreInput: true,
                     }
                 }
@@ -574,6 +576,7 @@ export class KeywordActionPlugin {
                     });
 
                     const validationResult = await this.validateExtraction(extraction, paramReq, pendingAction);
+                    elizaLogger.info("KeywordActionPlugin: Validation result:", validationResult);
                     if (validationResult.valueSet && !validationResult.needsOptionalParam) {
                         continue;
                     }
@@ -597,9 +600,9 @@ export class KeywordActionPlugin {
                 );
                 
                 // Only delete the pending action if we don't need more input
-                if (!result.action?.includes('NEED_') && result.action !== 'ERROR') {
+                if (result.action !== 'NEED_TOKEN_OWNER') {
                     this.pendingActions.delete(userId);
-                }
+                }   
                 
                 return {
                     hasAction: true,

@@ -305,6 +305,7 @@ export class MovebotService extends TwitterInteractionClient {
             if (result.hasAction) {
                 elizaLogger.info("MovebotService: Plugin processing result:", {
                     action: result.action,
+                    response: result.response,
                     needsMoreInput: result.needsMoreInput,
                     hasResponse: !!result.response
                 });

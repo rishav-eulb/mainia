@@ -350,7 +350,7 @@ Previous conversation context:
 Only respond with the JSON, no other text.`,
                     validator: async (value: string, runtime: IAgentRuntime) => {
                         // If the input is already a clean symbol format, use it directly
-                        const directInput = value.trim().toUpperCase();
+                        const directInput = value.trim().toUpperCase().replace(/^[$]?/, '');
                         if (directInput.length <= 1 || directInput.length > 10) {
                             return false;
                         }
@@ -591,7 +591,7 @@ Only respond with the JSON, no other text.`,
                 if (result.success) {
                     const networkSetting = runtime.getSetting("MOVEMENT_NETWORK") || DEFAULT_NETWORK;
                     const network = MOVEMENT_NETWORK_CONFIG[networkSetting] || MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
-                    const explorerUrl = `${MOVEMENT_EXPLORER_URL}/${result.transactionId}?network=${network.explorerNetwork}`;
+                    const explorerUrl = `${MOVEMENT_EXPLORER_URL}/txn/${result.transactionId}?network=${network.explorerNetwork}`;
                     
                     return {
                         response: `✅ Token created successfully!\n\nToken: ${symbol} (${name})\nSupply: ${Number(supply).toLocaleString()} tokens\n${projectUrl ? `Project: ${projectUrl}\n` : ''}View transaction: ${explorerUrl}`,
