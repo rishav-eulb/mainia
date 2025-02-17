@@ -327,15 +327,15 @@ export class TokenOwnershipTransferPlugin implements IKeywordPlugin {
             name: "transfer_token_ownership",
             description: "Transfer token ownership to another address",
             examples: [
-                "@radhemfeulb69 transfer ownership of TEST to 0x123...",
-                "@radhemfeulb69 transfer token ownership TEST to 0x456...",
-                "@radhemfeulb69 transfer ownership of token 0x789... to 0x123...",
-                "@radhemfeulb69 transfer token 0x789... ownership to 0x123...",
-                "@radhemfeulb69 transfer ownership of token 0x789... to @user",
-                "@radhemfeulb69 transfer ownership of token TEST to @user",
-                "@radhemfeulb69 transfer token 0x789... ownership to @user",
-                "@radhemfeulb69 transfer ownership to @user",
-                 "@radhemfeulb69 transfer ownership to  0x125..."
+                "@gmovebot transfer ownership of TEST to 0x123...",
+                "@gmovebot transfer token ownership TEST to 0x456...",
+                "@gmovebot transfer ownership of token 0x789... to 0x123...",
+                "@gmovebot transfer token 0x789... ownership to 0x123...",
+                "@gmovebot transfer ownership of token 0x789... to @user",
+                "@gmovebot transfer ownership of token TEST to @user",
+                "@gmovebot transfer token 0x789... ownership to @user",
+                "@gmovebot transfer ownership to @user",
+                 "@gmovebot transfer ownership to  0x125..."
 
             ],
             requiredParameters: [
