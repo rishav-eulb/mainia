@@ -309,10 +309,10 @@ End of Prompt`;
             name: "create_token",
             description: "Create and mint a new token",
             examples: [
-                "@radhemfeulb69 create token TEST Token",
-                "@radhemfeulb69 create $TEST token Token with supply 1000000",
-                "@radhemfeulb69 create token TEST Token supply 1M project https://test.com",
-                "@radhemfeulb69 mint new token TEST Token"
+                "@gmovebot create token TEST Token",
+                "@gmovebot create $TEST token Token with supply 1000000",
+                "@gmovebot create token TEST Token supply 1M project https://test.com",
+                "@gmovebot mint new token TEST Token"
             ],
             requiredParameters: [
                 {
@@ -600,7 +600,7 @@ Only respond with the JSON, no other text.`,
                     };
                 } else if (result.action === "WALLET_REQUIRED") {
                     return {
-                        response: result.error + "\nUse '@radhemfeulb69 create wallet' to create one.",
+                        response: result.error + "\nUse '@gmovebot create wallet' to create one.",
                         action: "ERROR"
                     };
                 } else {

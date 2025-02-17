@@ -358,12 +358,12 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
             name: "transfer_token",
             description: "Transfer tokens to another user or address",
             examples: [
-                "@radhemfeulb69 transfer 100 tokens to @user",
-                "@radhemfeulb69 send 50 TEST to 0x123...",
-                "@radhemfeulb69 can you some USDC to @user",
-                "@radhemfeulb69 send 100 USDC to 0x53...",
-                "@radhemfeulb69 send some tokens to 0x53...",
-                "@radhemfeulb69 can you please send some tokens to @user",
+                "@gmovebot transfer 100 tokens to @user",
+                "@gmovebot send 50 TEST to 0x123...",
+                "@gmovebot can you some USDC to @user",
+                "@gmovebot send 100 USDC to 0x53...",
+                "@gmovebot send some tokens to 0x53...",
+                "@gmovebot can you please send some tokens to @user",
             ],
             requiredParameters: [
                 {
@@ -406,7 +406,7 @@ Only respond with the JSON, no other text.`,
                     extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
 
 Parameter to extract: recipient
-Parameter description: Either a Twitter username (starting with @, don't confuse it with @radhemfeulb69) or a wallet address (starting with 0x, please don't confuse it with token owner address).
+Parameter description: Either a Twitter username (starting with @, don't confuse it with @gmovebot) or a wallet address (starting with 0x, please don't confuse it with token owner address).
 
 User's message:
 {{userMessage}}
@@ -515,7 +515,7 @@ Only respond with the JSON, no other text.`,
                     extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
 
 Parameter to extract: tokenOwner
-Parameter description: Either a Twitter username (starting with @, don't confuse it with @radhemfeulb69 or recipient name ) or a wallet address (starting with 0x, please don't confuse it with recipient address).
+Parameter description: Either a Twitter username (starting with @, don't confuse it with @gmovebot or recipient name ) or a wallet address (starting with 0x, please don't confuse it with recipient address).
 
 User's message:
 {{userMessage}}

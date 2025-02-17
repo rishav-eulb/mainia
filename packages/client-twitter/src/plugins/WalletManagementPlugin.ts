@@ -354,12 +354,12 @@ Only respond with the JSON, no other text.`;
             name: "wallet_management",
             description: "Get user's wallet address or token balance",
             examples: [
-                "@radhemfeulb69 what is my wallet address",
-                "@radhemfeulb69 show my wallet address",
-                "@radhemfeulb69 get my MOVE balance",
-                "@radhemfeulb69 how much USDC do I have",
-                "@radhemfeulb69 check my BTC balance",
-                "@radhemfeulb69 show my TEST token balance from @owner"
+                "@gmovebot what is my wallet address",
+                "@gmovebot show my wallet address",
+                "@gmovebot get my MOVE balance",
+                "@gmovebot how much USDC do I have",
+                "@gmovebot check my BTC balance",
+                "@gmovebot show my TEST token balance from @owner"
             ],
             requiredParameters: [
                 {

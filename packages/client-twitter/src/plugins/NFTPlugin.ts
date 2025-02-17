@@ -393,11 +393,11 @@ export class NFTPlugin implements IKeywordPlugin {
             name: "create_nft",
             description: "Create a new NFT from a tweet",
             examples: [
-                "@radhemfeulb69 create nft from this tweet",
-                "@radhemfeulb69 mint nft",
-                "@radhemfeulb69 create nft from https://twitter.com/user/status/123456",
-                "@radhemfeulb69 create nft from quoted tweet",
-                "@radhemfeulb69 create nft from replied tweet"
+                "@gmovebot create nft from this tweet",
+                "@gmovebot mint nft",
+                "@gmovebot create nft from https://twitter.com/user/status/123456",
+                "@gmovebot create nft from quoted tweet",
+                "@gmovebot create nft from replied tweet"
             ],
             action: async (tweet: Tweet, runtime: IAgentRuntime) => {
                 try {
@@ -458,9 +458,9 @@ export class NFTPlugin implements IKeywordPlugin {
             name: "create_soul_bound",
             description: "Create a soul-bound NFT from a tweet",
             examples: [
-                "@radhemfeulb69 create nft for @user",
-                "@radhemfeulb69 mint nft to 0x123",
-                "@radhemfeulb69 create nft for myself"
+                "@gmovebot create nft for @user",
+                "@gmovebot mint nft to 0x123",
+                "@gmovebot create nft for myself"
             ],
             preprocessTweet: async (tweet: Tweet, runtime: IAgentRuntime): Promise<Map<string, string>> => {
                 elizaLogger.info("preprocessing tweet.")
@@ -600,9 +600,9 @@ Only respond with the JSON, no other text.`
             name: "transfer_nft",
             description: "Transfer an NFT to another user or address",
             examples: [
-                "@radhemfeulb69 transfer nft #0001 to @user",
-                "@radhemfeulb69 send nft First User#0001 to 0x123...",
-                "@radhemfeulb69 transfer my nft #0002 to @recipient"
+                "@gmovebot transfer nft #0001 to @user",
+                "@gmovebot send nft First User#0001 to 0x123...",
+                "@gmovebot transfer my nft #0002 to @recipient"
             ],
             requiredParameters: [
                 {

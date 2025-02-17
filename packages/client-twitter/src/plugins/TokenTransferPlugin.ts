@@ -310,10 +310,10 @@ export class TokenTransferPlugin implements IKeywordPlugin {
             name: "move_transfer",
             description: "Transfer MOVE tokens to another user",
             examples: [
-                "@radhemfeulb69 transfer 100 MOVE to @user",
-                "@radhemfeulb69 send 50 MOVE to @recipient",
-                "@radhemfeulb69 transfer 200 MOVE tokens to @username",
-                "@radhemfeulb69 send MOVE tokens to @user"
+                "@gmovebot transfer 100 MOVE to @user",
+                "@gmovebot send 50 MOVE to @recipient",
+                "@gmovebot transfer 200 MOVE tokens to @username",
+                "@gmovebot send MOVE tokens to @user"
             ],
             requiredParameters: [
                 {
@@ -356,7 +356,7 @@ Only respond with the JSON, no other text.`,
                     extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
 
 Parameter to extract: recipient
-Parameter description: Twitter username (starting with @) of the recipient, make sure it is not @radhemfeulb69 or wallet address.
+Parameter description: Twitter username (starting with @) of the recipient, make sure it is not @gmovebot or wallet address.
 
 User's message:
 {{userMessage}}
