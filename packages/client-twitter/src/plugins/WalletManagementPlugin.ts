@@ -20,17 +20,17 @@ import { ServiceType } from "@elizaos/core";
 
 interface PendingWalletAction {
     username: string;
-    action: 'GET_ADDRESS' | 'GET_BALANCE';
+    action: 'GET_ADDRESS' | 'GET_BALANCE' | 'FINAL_CHECK';
     symbol?: string;
     tokenOwnerUsername?: string;
     lastPromptTime: number;
     attempts: number;
-    state: 'NEED_TOKEN' | 'NEED_TOKEN_OWNER' | 'READY';
+    state: 'NEED_TOKEN' | 'READY' | 'NEED_TOKEN_OWNER';
 }
 
 export interface WalletParams {
     username: string;
-    action: 'GET_ADDRESS' | 'GET_BALANCE';
+    action: 'GET_ADDRESS' | 'GET_BALANCE' | 'FINAL_CHECK';
     symbol?: string;
     tokenOwnerUsername?: string;
 }
@@ -252,6 +252,21 @@ export class WalletManagementPlugin implements IKeywordPlugin {
                             action: "ERROR"
                         };
                     }
+                } else if (params.action === 'FINAL_CHECK' && params.tokenOwnerUsername) {
+
+                    const balance = await this.getUnverifiedTokenBalance(
+                        params.username,
+                        aptosClient,
+                        contractAddress,
+                        params.symbol,
+                        params.tokenOwnerUsername
+                    );
+                    return {
+                        success: true,
+                        balance,
+                        action: "BALANCE_RETRIEVED"
+                    };
+                
                 }
 
             } catch (error) {
@@ -376,11 +391,11 @@ Previous conversation context:
 }
 
 Only respond with the JSON, no other text.`,
-                    validator: (value: string) => ['GET_ADDRESS', 'GET_BALANCE'].includes(value)
+                    validator: (value: string) => ['GET_ADDRESS', 'GET_BALANCE', 'FINAL_CHECK'].includes(value)
                 }
             ],
             preprocessTweet: async (tweet: Tweet, runtime: IAgentRuntime) => {
-                const text = tweet.text.toLowerCase();
+                const text = tweet.text;
                 const params = new Map<string, string>();
 
                 // Extract action from text
@@ -390,12 +405,12 @@ Only respond with the JSON, no other text.`,
                     params.set('action', 'GET_BALANCE');
 
                     // Define verified tokens
-                    const verifiedTokens = ['MOVE', 'WBTC', 'WETH', 'USDC', 'USDT'];
+                    const verifiedTokens = ['MOVE', 'WBTC', 'WETH', 'USDC', 'USDT', 'move', 'wbtc', 'weth', 'usdc', 'usdt'];
                     
                     // First check for verified tokens
                     const verifiedTokenMatch = text.match(new RegExp(`\\b(${verifiedTokens.join('|')})\\b`, 'i'));
                     if (verifiedTokenMatch) {
-                        params.set('symbol', verifiedTokenMatch[1].toUpperCase());
+                        params.set('symbol', verifiedTokenMatch[0].toUpperCase());
                     } else {
                         // Use text generation service for token symbol extraction
                         const textGenerationService = runtime.getService<ITextGenerationService>(ServiceType.TEXT_GENERATION);
@@ -453,11 +468,12 @@ Only respond with the JSON, no other text.`,
                     // Check for token owner in case of user-created tokens
                     const ownerMatch = text.match(/from\s+@(\w+)/i);
                     if (ownerMatch) {
-                        const potentialOwner = ownerMatch[1].toLowerCase();
+                        const potentialOwner = ownerMatch[0]
+                        elizaLogger.info("potentialOwner", ownerMatch[0]);
                         // Don't set token owner if it matches the bot's username
-                        if (potentialOwner !== runtime.getSetting("TWITTER_USERNAME")?.toLowerCase()) {
-                            params.set('tokenOwnerUsername', ownerMatch[1]);
-                        }
+                        
+                            params.set('tokenOwnerUsername', potentialOwner.replace('@', ''));
+                    
                     }
                 }
 
@@ -468,6 +484,7 @@ Only respond with the JSON, no other text.`,
                 
                 // Check for pending action
                 const pendingAction = this.pendingActions.get(tweet.username);
+                elizaLogger.info("pendingAction", pendingAction);
                 if (pendingAction) {
                     // Update attempts
                     pendingAction.attempts++;
@@ -493,20 +510,21 @@ Only respond with the JSON, no other text.`,
                                 pendingAction.state = 'NEED_TOKEN_OWNER';
                                 return {
                                     response: `${symbol} appears to be a user-created token. Please provide the token owner's username (e.g., "from @owner")`,
-                                    action: "NEED_TOKEN_OWNER"
+                                    action: "FINAL_CHECK"
                                 };
                             } else {
                                 pendingAction.state = 'READY';
                             }
                         }
                     } else if (pendingAction.state === 'NEED_TOKEN_OWNER') {
-                        const ownerMatch = tweet.text.match(/from\s+@(\w+)/i);
+                        const ownerMatch = tweet.text.match(/@[a-zA-Z0-9_]{1,15}/);
+                        elizaLogger.info("ownerMatch", ownerMatch);
                         if (ownerMatch) {
-                            const potentialOwner = ownerMatch[1].toLowerCase();
-                            if (potentialOwner !== runtime.getSetting("TWITTER_USERNAME")?.toLowerCase()) {
-                                pendingAction.tokenOwnerUsername = ownerMatch[1];
+                            const potentialOwner = ownerMatch[0];
+                
+                                pendingAction.tokenOwnerUsername = potentialOwner.replace('@', '');
                                 pendingAction.state = 'READY';
-                            }
+                        
                         }
                     }
 
@@ -562,7 +580,7 @@ Only respond with the JSON, no other text.`,
                 // Prepare base parameters
                 const walletParams: WalletParams = {
                     username: tweet.username,
-                    action: action as 'GET_ADDRESS' | 'GET_BALANCE'
+                    action: action as 'GET_ADDRESS' | 'GET_BALANCE' | 'FINAL_CHECK'
                 };
 
                 // If it's a balance check, we need additional parameters
@@ -593,7 +611,7 @@ Only respond with the JSON, no other text.`,
                             // Create pending action
                             this.pendingActions.set(tweet.username, {
                                 username: tweet.username,
-                                action: 'GET_BALANCE',
+                                action: 'FINAL_CHECK',
                                 symbol,
                                 lastPromptTime: Date.now(),
                                 attempts: 1,
@@ -602,7 +620,7 @@ Only respond with the JSON, no other text.`,
                             
                             return {
                                 response: `${symbol} appears to be a user-created token. Please provide the token owner's username (e.g., "from @owner")`,
-                                action: "NEED_TOKEN_OWNER"
+                                action: "FINAL_CHECK"
                             };
                         }
                         walletParams.tokenOwnerUsername = tokenOwnerUsername;
@@ -631,6 +649,11 @@ Only respond with the JSON, no other text.`,
                             action: "BALANCE_RETRIEVED"
                         };
                     }
+                } else if (result.action === "TOKEN_OWNER_VERIFIED") {
+                    return {
+                        response: "Token owner verified successfully.",
+                        action: "TOKEN_OWNER_VERIFIED"
+                    };
                 } else if (result.needsRegistration) {
                     return {
                         response: "You don't have a wallet yet. Reply 'create wallet' to create one.",

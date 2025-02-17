@@ -401,6 +401,38 @@ Only respond with the JSON, no other text.`,
                     }
                 },
                 {
+                    name: "recipient",
+                    prompt: "Please provide either the recipient's Twitter username (e.g., @user) or wallet address (starting with 0x)",
+                    extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
+
+Parameter to extract: recipient
+Parameter description: Either a Twitter username (starting with @, don't confuse it with @radhemfeulb69) or a wallet address (starting with 0x, please don't confuse it with token owner address).
+
+User's message:
+{{userMessage}}
+
+Previous conversation context:
+{{conversationContext}}
+
+# Instructions:
+1. Extract the value for the specified parameter
+2. Consider implicit mentions in the context
+3. Consider common variations and synonyms
+4. Return your response in this JSON format:
+{
+    "extracted": true/false,
+    "value": "extracted_value or null if not found",
+    "confidence": "HIGH/MEDIUM/LOW",
+    "alternativeValues": ["other", "possible", "interpretations"],
+    "clarificationNeeded": true/false,
+    "suggestedPrompt": "A natural way to ask for clarification if needed",
+    "reasoning": "Brief explanation of the extraction logic"
+}
+
+Only respond with the JSON, no other text.`,
+                    validator: (value: string) => /^@?[A-Za-z0-9_]{1,15}$/.test(value) || /^0x[0-9a-fA-F]{64}$/.test(value)
+                },
+                {
                     name: "symbol",
                     prompt: "What token would you like to transfer?",
                     extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
@@ -438,6 +470,11 @@ Only respond with the JSON, no other text.`,
                         }
 
                         const symbol = value.toUpperCase();
+                        if(symbol.toUpperCase() == "MOVE") {
+                            return {
+                                isValidated: true
+                            }
+                        }
                         const contractAddress = "0xf17f471f57b12eb5a8bd1d722b385b5f1f0606d07b553828c344fb4949fd2a9d";
                         const network = MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
 
@@ -469,39 +506,7 @@ Only respond with the JSON, no other text.`,
                             optionalParameterPrompt: "This token is not verified. Please provide either the token owner's Twitter username (e.g., @user)"
                         }
                     },
-                },
-                {
-                    name: "recipient",
-                    prompt: "Please provide either the recipient's Twitter username (e.g., @user) or wallet address (starting with 0x)",
-                    extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
-
-Parameter to extract: recipient
-Parameter description: Either a Twitter username (starting with @, don't confuse it with @radhemfeulb69) or a wallet address (starting with 0x, please don't confuse it with token owner address).
-
-User's message:
-{{userMessage}}
-
-Previous conversation context:
-{{conversationContext}}
-
-# Instructions:
-1. Extract the value for the specified parameter
-2. Consider implicit mentions in the context
-3. Consider common variations and synonyms
-4. Return your response in this JSON format:
-{
-    "extracted": true/false,
-    "value": "extracted_value or null if not found",
-    "confidence": "HIGH/MEDIUM/LOW",
-    "alternativeValues": ["other", "possible", "interpretations"],
-    "clarificationNeeded": true/false,
-    "suggestedPrompt": "A natural way to ask for clarification if needed",
-    "reasoning": "Brief explanation of the extraction logic"
-}
-
-Only respond with the JSON, no other text.`,
-                    validator: (value: string) => /^@?[A-Za-z0-9_]{1,15}$/.test(value) || /^0x[0-9a-fA-F]{64}$/.test(value)
-                },
+                }
             ],
             optionalParameters: [
                 {

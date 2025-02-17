@@ -21,6 +21,6 @@ export const MOVEMENT_NETWORK_CONFIG = {
     }
 } as const;
 
-export const MOVEMENT_EXPLORER_URL = 'https://explorer.movementnetwork.xyz/';
+export const MOVEMENT_EXPLORER_URL = 'https://explorer.movementnetwork.xyz';
 
 export const DEFAULT_NETWORK = 'bardock';

@@ -481,7 +481,10 @@ export class NFTPlugin implements IKeywordPlugin {
                 {
                     name: "recipient",
                     prompt: "Who should receive this soul-bound NFT? Please provide for yourself, username (@handle) or wallet address",
-                    validator: (value: string) => /^(@\w{1,15}|0x[0-9a-fA-F]{64}|self)$/.test(value),
+                    validator: async (value: string, runtime: IAgentRuntime): Promise<boolean> => {
+                        value = value.replace('@', '');
+                        return /^(\w{1,15}|0x[0-9a-fA-F]{64}|self)$/.test(value)
+                    },
                     extractorTemplate: `# Task: Extract parameter value from user's message in a conversational context
 
 Parameter to extract: recipient
@@ -515,7 +518,9 @@ Only respond with the JSON, no other text.`
             action: async (tweet: Tweet, runtime: IAgentRuntime, params: Map<string, string>) => {
                 try {
                     const isSelfSoulBound = params.get("recipient")?.toLowerCase() === "self";
-                    let recipient = isSelfSoulBound ? `@${tweet.username}` : params.get("recipient");
+                    let recipient = isSelfSoulBound ? `@${tweet.username}` : (
+                        params.get("recipient").startsWith("0x") ? 
+                        params.get("recipient") : `@${params.get("recipient")}`);
 
                     // Get tweet ID and image based on context
                     const { tweetId, imageUri } = { tweetId: params.get("tweetId"), imageUri: params.get("imageUri") }

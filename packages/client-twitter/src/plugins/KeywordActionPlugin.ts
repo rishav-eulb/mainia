@@ -434,23 +434,23 @@ export class KeywordActionPlugin {
         needsMoreInput?: boolean;
     }> {
         // First try plugin-specific handlers
-        for (const plugin of this.plugins.values()) {
-            if (plugin.handleTweet) {
-                try {
-                    const result = await plugin.handleTweet(tweet, this.runtime);
-                    if (result.response || result.action) {
-                        return {
-                            hasAction: true,
-                            action: result.action,
-                            response: result.response,
-                            data: result.data
-                        };
-                    }
-                } catch (error) {
-                    elizaLogger.error(`Error in plugin ${plugin.name} handleTweet:`, error);
-                }
-            }
-        }
+        // for (const plugin of this.plugins.values()) {
+        //     if (plugin.handleTweet) {
+        //         try {
+        //             const result = await plugin.handleTweet(tweet, this.runtime);
+        //             if (result.response || result.action) {
+        //                 return {
+        //                     hasAction: true,
+        //                     action: result.action,
+        //                     response: result.response,
+        //                     data: result.data
+        //                 };
+        //             }
+        //         } catch (error) {
+        //             elizaLogger.error(`Error in plugin ${plugin.name} handleTweet:`, error);
+        //         }
+        //     }
+        // }
 
         // Fall back to standard keyword action processing
         const userId = tweet.userId;
@@ -600,9 +600,10 @@ export class KeywordActionPlugin {
                 );
                 
                 // Only delete the pending action if we don't need more input
-                if (result.action !== 'NEED_TOKEN_OWNER') {
+                if(result.action !== 'FINAL_CHECK') {
                     this.pendingActions.delete(userId);
-                }   
+                }
+                 
                 
                 return {
                     hasAction: true,

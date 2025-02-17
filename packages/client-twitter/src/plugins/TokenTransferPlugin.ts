@@ -96,6 +96,7 @@ export class TokenTransferPlugin implements IKeywordPlugin {
             });
             return result[0] as string;
         } catch (error) {
+            elizaLogger.info("User not found, creating user:", error instanceof Error ? error.message: String(error));
             const privateKey = this.runtime.getSetting("MOVEMENT_PRIVATE_KEY");
             if (!privateKey) {
                 throw new Error("Missing MOVEMENT_PRIVATE_KEY configuration");
@@ -123,7 +124,12 @@ export class TokenTransferPlugin implements IKeywordPlugin {
         action?: string;
         userWalletAddress?: string;
     }> {
-        let aptosClient: Aptos;
+        const network = MOVEMENT_NETWORK_CONFIG[DEFAULT_NETWORK];
+        const aptosClient = new Aptos(new AptosConfig({
+            network: Network.CUSTOM,
+            fullnode: network.fullnode,
+        }));
+
         let contractAddress: string;
         
         try {
@@ -150,17 +156,11 @@ export class TokenTransferPlugin implements IKeywordPlugin {
                 ),
             });
 
+            const userWalletAddress = await this.getUserWalletAddress(params.username, aptosClient, contractAddress);
+                
             // First try to get user's wallet address
             try {
-                const userWalletAddress = await this.getUserWalletAddress(params.username, aptosClient, contractAddress);
-                if (!userWalletAddress) {
-                    return {
-                        success: false,
-                        error: "Failed to get user wallet address",
-                        action: "USER_NOT_FOUND"
-                    };
-                }
-
+            
                 // User exists, proceed with transfer
                 // Convert amount to proper format (assuming MOVE_DECIMALS = 8)
                 const amountInBaseUnits = BigInt(Number(params.amount) * Math.pow(10, 8));
@@ -441,7 +441,7 @@ Only respond with the JSON, no other text.`,
                     if (result.success) {
                         const networkSetting = runtime.getSetting("MOVEMENT_NETWORK") || DEFAULT_NETWORK;
                         const network = MOVEMENT_NETWORK_CONFIG[networkSetting];
-                        const explorerUrl = `${MOVEMENT_EXPLORER_URL}/txn${result.transactionId}?network=${network.explorerNetwork}`;
+                        const explorerUrl = `${MOVEMENT_EXPLORER_URL}/txn/${result.transactionId}?network=${network.explorerNetwork}`;
 
                         return {
                             response: `✅ Transfer successful!\n\nAmount: ${amount} MOVE\nTo: @${recipient}\n\nView transaction: ${explorerUrl}`,
