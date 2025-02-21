@@ -283,6 +283,7 @@ export class TokenFungibleTransferPlugin implements IKeywordPlugin {
                 let result;
                 if (params.symbol && (params.symbol == "MOVE" || params.symbol == "move")) {
                     result = await this.tokenTransferPlugin.stage_execute(movementTokenparam);
+                    result.hash = result.transactionId
                 } else if (params.symbol && params.isVerified) {
                     result = await this.transferBySymbol(aptosClient, movementAccount, contractAddress, params);
                 } else if (params.tokenCreator && params.symbol && !params.isVerified) {
